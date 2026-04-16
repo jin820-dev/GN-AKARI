@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local editor / agent files
+.DS_Store
+.idea/
+.vscode/
+.codex
+docs/
+test/
+tests/
+
+# Runtime data and generated outputs
+data/**
+!data/**/
+!data/**/.gitkeep
+cache/**
+!cache/**/
+!cache/**/.gitkeep
+outputs/**
+!outputs/**/
+!outputs/**/.gitkeep
+tmp/**
+!tmp/**/
+!tmp/**/.gitkeep
+
+# Local logs
+*.log
+
+# Development documents (not for release)
+AGENTS.md
+PROJECT.md
+TASK.md

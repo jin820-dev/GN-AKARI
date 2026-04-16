@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GN-AKARI Gallery</title>
+  <style>
+    :root {
+      --akari-main: #f6b26b;
+      --akari-soft: #fde7d3;
+      --akari-accent: #e69138;
+      --akari-border: #f3caa3;
+      --akari-bg: #fff7f0;
+      --text-main: #5a3a1b;
+      --text-soft: #8b6a49;
+      --surface: #ffffff;
+    }
+    body {
+      font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", sans-serif;
+      margin: 24px;
+      line-height: 1.5;
+      background: var(--akari-bg);
+      color: var(--text-main);
+    }
+    h1, h2 {
+      color: var(--text-main);
+    }
+    h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+    h2 {
+      font-size: 18px;
+      margin-top: 0;
+      margin-bottom: 12px;
+    }
+    .page-header {
+      margin-bottom: 16px;
+    }
+    .page-nav {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+    .page-nav a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 7px 12px;
+      border: 1px solid var(--akari-border);
+      border-radius: 999px;
+      color: var(--text-soft);
+      text-decoration: none;
+      font-weight: 700;
+      background: rgba(255, 255, 255, 0.65);
+    }
+    .page-nav a:hover {
+      color: var(--text-main);
+      border-color: var(--akari-accent);
+    }
+    .page-nav a.is-active {
+      color: var(--text-main);
+      background: var(--akari-soft);
+      border-color: var(--akari-accent);
+      box-shadow: inset 0 -2px 0 var(--akari-accent);
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--akari-border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(230, 145, 56, 0.08);
+    }
+    .status {
+      color: var(--text-main);
+      margin-bottom: 12px;
+      font-size: 0.95rem;
+      min-height: 1.4em;
+      padding: 8px 10px;
+      border: 1px solid var(--akari-border);
+      background: var(--akari-soft);
+      border-radius: 10px;
+    }
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .gallery-item {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+    .gallery-link {
+      display: block;
+      border: 1px solid var(--akari-border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fffdfa;
+      text-decoration: none;
+    }
+    .gallery-image {
+      display: block;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: contain;
+      background-color: #f5f5f5;
+      background-image:
+        linear-gradient(45deg, #ddd 25%, transparent 25%),
+        linear-gradient(-45deg, #ddd 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #ddd 75%),
+        linear-gradient(-45deg, transparent 75%, #ddd 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    }
+    .gallery-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .gallery-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .filename {
+      font-weight: 700;
+      word-break: break-all;
+    }
+    .mtime {
+      color: var(--text-soft);
+      font-size: 0.9rem;
+    }
+    .empty {
+      color: var(--text-soft);
+      font-size: 0.95rem;
+      padding: 12px;
+      border: 1px dashed var(--akari-border);
+      border-radius: 10px;
+      background: #fffdfa;
+    }
+    button {
+      background: var(--akari-main);
+      color: var(--text-main);
+      border: none;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      box-shadow: 0 4px 12px rgba(230, 145, 56, 0.18);
+    }
+    button:hover {
+      background: var(--akari-accent);
+    }
+  </style>
+</head>
+<body>
+  <header class="page-header">
+    <h1>GN-AKARI</h1>
+    <nav class="page-nav" aria-label="Primary">
+      <a href="/">立ち絵合成</a>
+      <a href="/scene">写真合成</a>
+      <a href="/gallery" class="is-active" aria-current="page">ギャラリー</a>
+      <a href="/settings">設定</a>
+    </nav>
+  </header>
+
+  <section class="panel">
+    <h2>Portrait Gallery</h2>
+    <div id="gallery-status" class="status"></div>
+    {% if portrait_gallery_items %}
+    <div id="portrait-gallery-grid" class="gallery-grid">
+      {% for item in portrait_gallery_items %}
+      <div class="gallery-item" data-gallery-item="portrait:{{ item.filename }}">
+        <a class="gallery-link" href="{{ item.url }}" target="_blank">
+          <img class="gallery-image" src="{{ item.url }}" alt="{{ item.filename }}">
+        </a>
+        <div class="gallery-meta">
+          <div class="filename">{{ item.filename }}</div>
+          <div class="mtime">{{ item.mtime.strftime("%Y-%m-%d %H:%M:%S") }}</div>
+        </div>
+        <div class="gallery-actions">
+          <button
+            type="button"
+            data-filename="{{ item.filename }}"
+            onclick="usePortrait(this.dataset.filename)"
+          >使う</button>
+          <button
+            type="button"
+            data-filename="{{ item.filename }}"
+            onclick="deleteGalleryImage('portrait', this.dataset.filename)"
+          >削除</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div id="portrait-gallery-empty" class="empty" {% if portrait_gallery_items %}style="display:none"{% endif %}>保存済みの立ち絵はまだありません。</div>
+  </section>
+
+  <section class="panel" style="margin-top: 16px;">
+    <h2>Scene Gallery</h2>
+    {% if scene_gallery_items %}
+    <div id="scene-gallery-grid" class="gallery-grid">
+      {% for item in scene_gallery_items %}
+      <div class="gallery-item" data-gallery-item="scene:{{ item.filename }}">
+        <a class="gallery-link" href="{{ item.url }}" target="_blank">
+          <img class="gallery-image" src="{{ item.url }}" alt="{{ item.filename }}">
+        </a>
+        <div class="gallery-meta">
+          <div class="filename">{{ item.filename }}</div>
+          <div class="mtime">{{ item.mtime.strftime("%Y-%m-%d %H:%M:%S") }}</div>
+        </div>
+        <div class="gallery-actions">
+          <button
+            type="button"
+            data-filename="{{ item.filename }}"
+            onclick="deleteGalleryImage('scene', this.dataset.filename)"
+          >削除</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div id="scene-gallery-empty" class="empty" {% if scene_gallery_items %}style="display:none"{% endif %}>保存済みの写真合成画像はまだありません。</div>
+  </section>
+
+  <script>
+    const galleryStatus = document.getElementById('gallery-status');
+    const portraitGalleryGrid = document.getElementById('portrait-gallery-grid');
+    const sceneGalleryGrid = document.getElementById('scene-gallery-grid');
+    const portraitGalleryEmpty = document.getElementById('portrait-gallery-empty');
+    const sceneGalleryEmpty = document.getElementById('scene-gallery-empty');
+
+    function showStatus(message, isError = false) {
+      if (!galleryStatus) return;
+      galleryStatus.textContent = message;
+      galleryStatus.style.color = isError ? '#b00020' : '#0a5';
+    }
+
+    function updateEmptyState(kind) {
+      const galleryGrid = kind === 'scene' ? sceneGalleryGrid : portraitGalleryGrid;
+      const galleryEmpty = kind === 'scene' ? sceneGalleryEmpty : portraitGalleryEmpty;
+      if (!galleryEmpty) return;
+      const hasItems = galleryGrid && galleryGrid.querySelector('[data-gallery-item]');
+      galleryEmpty.style.display = hasItems ? 'none' : 'block';
+    }
+
+    function usePortrait(filename) {
+      if (!filename) return;
+      window.location.href = "/scene?portrait=" + encodeURIComponent(filename);
+    }
+
+    async function deleteGalleryImage(kind, filename) {
+      if (!filename) return;
+      if (!window.confirm(`画像「${filename}」を削除します。よろしいですか？`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/gallery/delete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name: filename, kind }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || '画像の削除に失敗しました。');
+        }
+
+        const item = document.querySelector(`[data-gallery-item="${CSS.escape(kind + ':' + filename)}"]`);
+        item?.remove();
+        updateEmptyState(kind);
+        showStatus(`画像「${data.name}」を削除しました。`);
+      } catch (error) {
+        showStatus(error.message || '画像の削除に失敗しました。', true);
+      }
+    }
+  </script>
+</body>
+</html>

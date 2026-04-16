@@ -1,0 +1,1992 @@
+from __future__ import annotations
+
+import json
+import hashlib
+import re
+import secrets
+import shutil
+from datetime import datetime
+from io import BytesIO
+import subprocess
+import sys
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
+
+from bubble_assets import (
+    OVERLAY_ASSETS_METADATA_PATH,
+    OVERLAY_IMAGE_LIBRARY_DIR,
+    build_bubble_overlay_size,
+    list_registered_bubble_overlay_assets,
+    load_registered_overlay_asset_records,
+    rasterize_bubble_overlay_asset,
+    save_registered_overlay_asset_records,
+)
+
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+DATA_PSD_DIR = ROOT_DIR / "data" / "psd"
+DATA_FONT_DIR = ROOT_DIR / "data" / "font"
+DATA_SRC_DIR = ROOT_DIR / "data" / "src"
+CACHE_DIR = ROOT_DIR / "cache"
+OUTPUTS_DIR = ROOT_DIR / "outputs"
+PREVIEW_OUTPUTS_DIR = OUTPUTS_DIR / "preview"
+PORTRAIT_OUTPUTS_DIR = OUTPUTS_DIR / "portrait"
+SCENE_OUTPUTS_DIR = OUTPUTS_DIR / "scene"
+SCENE_PREVIEW_OUTPUTS_DIR = OUTPUTS_DIR / "scene_preview"
+SCENE_BASE_OUTPUTS_DIR = OUTPUTS_DIR / "scene_base"
+COMPOSITE_PREVIEW_OUTPUTS_DIR = OUTPUTS_DIR / "composite_preview"
+SETTINGS_DATA_DIR = ROOT_DIR / "data" / "settings"
+SCENE_CANVAS_PRESETS = {
+    "16:9": (1920, 1080),
+    "4:3": (1600, 1200),
+    "3:2": (1800, 1200),
+    "1:1": (1200, 1200),
+    "9:16": (1080, 1920),
+}
+SCENE_PREVIEW_SCALE = 0.5
+DEFAULT_SCENE_LAYER_ORDER = ["base_image", "message_band", "character1", "character2", "overlay_image", "text2", "text1"]
+DEFAULT_SCENE_LAYER_ORDER_MODE = "aviutl"
+
+app = Flask(__name__, template_folder=str(ROOT_DIR / "templates"))
+
+
+def list_psd_files() -> list[str]:
+    if not DATA_PSD_DIR.exists():
+        return []
+    return sorted(
+        str(path.relative_to(ROOT_DIR))
+        for path in DATA_PSD_DIR.rglob("*.psd")
+        if path.is_file()
+    )
+
+
+def sanitize_psd_filename(filename: str) -> str:
+    normalized = Path(filename or "").name.strip()
+    if not normalized:
+        raise ValueError("filename is required.")
+    if Path(normalized).suffix.lower() != ".psd":
+        raise ValueError("only .psd files are supported.")
+
+    stem = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", Path(normalized).stem).strip(" ._")
+    if not stem:
+        raise ValueError("filename is invalid.")
+    return f"{stem}.psd"
+
+
+def build_psd_storage_path(filename: str) -> Path:
+    return DATA_PSD_DIR / sanitize_psd_filename(filename)
+
+
+def sanitize_font_filename(filename: str) -> str:
+    normalized = Path(filename or "").name.strip()
+    if not normalized:
+        raise ValueError("filename is required.")
+
+    suffix = Path(normalized).suffix.lower()
+    if suffix not in {".ttf", ".otf"}:
+        raise ValueError("only .ttf and .otf files are supported.")
+
+    stem = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", Path(normalized).stem).strip(" ._")
+    if not stem:
+        raise ValueError("filename is invalid.")
+    return f"{stem}{suffix}"
+
+
+def build_font_storage_path(filename: str) -> Path:
+    return DATA_FONT_DIR / sanitize_font_filename(filename)
+
+
+def resolve_font_file_path(filename: str) -> Path:
+    raw_name = (filename or "").strip()
+    if not raw_name:
+        raise ValueError("filename is required.")
+
+    safe_name = Path(raw_name).name
+    if raw_name != safe_name:
+        raise ValueError("filename is invalid.")
+    if Path(safe_name).suffix.lower() not in {".ttf", ".otf"}:
+        raise ValueError("only .ttf and .otf files are supported.")
+
+    candidate = (DATA_FONT_DIR / safe_name).resolve()
+    candidate.relative_to(DATA_FONT_DIR.resolve())
+    return candidate
+
+
+def list_font_file_items() -> list[dict]:
+    if not DATA_FONT_DIR.exists():
+        return []
+
+    items = []
+    for path in DATA_FONT_DIR.iterdir():
+        if not path.is_file() or path.suffix.lower() not in {".ttf", ".otf"}:
+            continue
+        stat = path.stat()
+        items.append(
+            {
+                "name": path.name,
+                "size": stat.st_size,
+                "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            }
+        )
+
+    items.sort(key=lambda item: (item["updated_at"], item["name"]), reverse=True)
+    return items
+
+
+def delete_font_file(filename: str) -> str:
+    font_path = resolve_font_file_path(filename)
+    if font_path.exists() and font_path.is_file():
+        font_path.unlink()
+    return font_path.name
+
+
+def list_psd_file_items() -> list[dict]:
+    if not DATA_PSD_DIR.exists():
+        return []
+
+    items = []
+    for path in DATA_PSD_DIR.glob("*.psd"):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        items.append(
+            {
+                "name": path.name,
+                "size": stat.st_size,
+                "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            }
+        )
+
+    items.sort(key=lambda item: (item["updated_at"], item["name"]), reverse=True)
+    return items
+
+
+def resolve_project_path(relative_path: str) -> Path:
+    candidate = (ROOT_DIR / relative_path).resolve()
+    candidate.relative_to(ROOT_DIR)
+    return candidate
+
+
+def resolve_psd_path(relative_path: str) -> Path:
+    candidate = resolve_project_path(relative_path)
+    candidate.relative_to(DATA_PSD_DIR.resolve())
+    if not candidate.exists():
+        raise FileNotFoundError(f"PSD file not found: {relative_path}")
+    return candidate
+
+
+def run_command(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=ROOT_DIR,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def extract_output_value(stdout: str, prefix: str) -> str:
+    for line in stdout.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    raise ValueError(f"Could not find '{prefix}' in command output.")
+
+
+def load_layers_json(layers_json_path: Path) -> dict:
+    return json.loads(layers_json_path.read_text(encoding="utf-8"))
+
+
+def build_psd_cache_key(psd_path: Path) -> str:
+    stat = psd_path.stat()
+    seed = f"{psd_path.name}:{stat.st_size}:{int(stat.st_mtime)}".encode("utf-8")
+    return f"psd_{hashlib.sha1(seed).hexdigest()[:12]}"
+
+
+def resolve_cached_layers_json_path(psd_path: Path) -> Path:
+    cache_key = build_psd_cache_key(psd_path)
+    return CACHE_DIR / cache_key / "layers.json"
+
+
+def load_cached_layers_payload(psd_path: Path) -> tuple[dict, Path] | None:
+    layers_json_path = resolve_cached_layers_json_path(psd_path)
+    if not layers_json_path.exists():
+        return None
+
+    payload = load_layers_json(layers_json_path)
+    if payload.get("psd_source", {}).get("cache_key") != layers_json_path.parent.name:
+        raise ValueError(f"cache metadata is invalid: {layers_json_path}")
+    return payload, layers_json_path
+
+
+def load_or_build_psd_layers(psd_path: Path) -> tuple[dict, Path]:
+    try:
+        cached = load_cached_layers_payload(psd_path)
+        if cached is not None:
+            return cached
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+
+    result = run_command([sys.executable, "src/psd_check.py", "--psd", str(psd_path)])
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "psd_check.py failed.")
+
+    layers_json_path = Path(extract_output_value(result.stdout, "layers.json: "))
+    payload = load_layers_json(layers_json_path)
+    return payload, layers_json_path
+
+
+def build_output_history_path(output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
+    return output_dir / f"{timestamp}.png"
+
+
+def build_overwrite_output_path(output_dir: Path, stem: str) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir / f"{stem}.png"
+
+
+def list_preview_sources() -> list[dict]:
+    sources = []
+    if not CACHE_DIR.exists():
+        return sources
+
+    for layers_json_path in sorted(CACHE_DIR.glob("*/layers.json")):
+        try:
+            payload = load_layers_json(layers_json_path)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        psd_source = payload.get("psd_source", {})
+        cache_key = psd_source.get("cache_key")
+        if not cache_key:
+            continue
+
+        preview_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.png"
+        sources.append(
+            {
+                "cache_key": cache_key,
+                "psd_filename": psd_source.get("filename", cache_key),
+                "preview_available": preview_path.exists(),
+                "preview_url": f"/outputs/preview/{cache_key}.png" if preview_path.exists() else None,
+            }
+        )
+
+    return sources
+
+
+def collect_psd_cache_keys(psd_name: str) -> list[str]:
+    safe_name = sanitize_psd_filename(psd_name)
+    cache_keys = set()
+    psd_path = DATA_PSD_DIR / safe_name
+
+    if psd_path.exists():
+        cache_keys.add(build_psd_cache_key(psd_path))
+
+    if CACHE_DIR.exists():
+        expected_source_path = str(Path("data") / "psd" / safe_name)
+        for layers_json_path in CACHE_DIR.glob("*/layers.json"):
+            try:
+                payload = load_layers_json(layers_json_path)
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            psd_source = payload.get("psd_source", {})
+            if psd_source.get("filename") == safe_name or psd_source.get("path") == expected_source_path:
+                cache_key = psd_source.get("cache_key") or layers_json_path.parent.name
+                if isinstance(cache_key, str) and cache_key:
+                    cache_keys.add(cache_key)
+
+    return sorted(cache_keys)
+
+
+def remove_cache_artifacts(cache_key: str) -> None:
+    shutil.rmtree(CACHE_DIR / cache_key, ignore_errors=True)
+    for output_dir in (PREVIEW_OUTPUTS_DIR, COMPOSITE_PREVIEW_OUTPUTS_DIR, SCENE_PREVIEW_OUTPUTS_DIR):
+        for suffix in (".png", ".json"):
+            artifact_path = output_dir / f"{cache_key}{suffix}"
+            if artifact_path.exists():
+                artifact_path.unlink()
+
+
+def delete_psd_with_cache(psd_name: str) -> dict:
+    safe_name = sanitize_psd_filename(psd_name)
+    psd_path = DATA_PSD_DIR / safe_name
+    if not psd_path.exists() or not psd_path.is_file():
+        raise FileNotFoundError(f"PSD file not found: {safe_name}")
+
+    cache_keys = collect_psd_cache_keys(safe_name)
+    psd_path.unlink()
+    for cache_key in cache_keys:
+        remove_cache_artifacts(cache_key)
+
+    return {
+        "name": safe_name,
+        "deleted_cache_keys": cache_keys,
+    }
+
+
+def list_gallery_items(output_dir: Path) -> list[dict]:
+    if not output_dir.exists():
+        return []
+
+    items = []
+    for image_path in output_dir.glob("*.png"):
+        stat = image_path.stat()
+        items.append(
+            {
+                "filename": image_path.name,
+                "url": f"/outputs/{image_path.relative_to(OUTPUTS_DIR)}",
+                "mtime": datetime.fromtimestamp(stat.st_mtime),
+            }
+        )
+
+    items.sort(key=lambda item: item["mtime"], reverse=True)
+    return items
+
+
+def list_portrait_gallery_items() -> list[dict]:
+    return list_gallery_items(PORTRAIT_OUTPUTS_DIR)
+
+
+def list_scene_gallery_items() -> list[dict]:
+    return list_gallery_items(SCENE_OUTPUTS_DIR)
+
+
+def resolve_gallery_output_path(output_dir: Path, filename: str) -> Path | None:
+    if not filename:
+        return None
+
+    candidate = (output_dir / filename).resolve()
+    try:
+        candidate.relative_to(output_dir.resolve())
+    except ValueError:
+        return None
+
+    if candidate.suffix.lower() != ".png" or not candidate.exists() or not candidate.is_file():
+        return None
+    return candidate
+
+
+def resolve_portrait_output_path(filename: str) -> Path | None:
+    return resolve_gallery_output_path(PORTRAIT_OUTPUTS_DIR, filename)
+
+
+def resolve_gallery_output_dir(kind: str) -> Path:
+    if kind == "portrait":
+        return PORTRAIT_OUTPUTS_DIR
+    if kind == "scene":
+        return SCENE_OUTPUTS_DIR
+    raise ValueError("kind is invalid.")
+
+
+def delete_gallery_output(filename: str, kind: str = "portrait") -> str:
+    raw_name = (filename or "").strip()
+    if not raw_name:
+        raise ValueError("name is required.")
+    safe_name = Path(raw_name).name
+    if raw_name != safe_name:
+        raise ValueError("name is invalid.")
+    if Path(safe_name).suffix.lower() != ".png":
+        raise ValueError("only .png files are supported.")
+
+    output_dir = resolve_gallery_output_dir(kind)
+    portrait_path = (output_dir / safe_name).resolve()
+    try:
+        portrait_path.relative_to(output_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("name is invalid.") from exc
+
+    if portrait_path.exists() and portrait_path.is_file():
+        portrait_path.unlink()
+    return safe_name
+
+
+def resolve_scene_base_output_path(filename: str) -> Path | None:
+    if not filename:
+        return None
+
+    candidate = (SCENE_BASE_OUTPUTS_DIR / filename).resolve()
+    try:
+        candidate.relative_to(SCENE_BASE_OUTPUTS_DIR.resolve())
+    except ValueError:
+        return None
+
+    if candidate.suffix.lower() != ".png" or not candidate.exists() or not candidate.is_file():
+        return None
+    return candidate
+
+
+def resolve_scene_overlay_output_path(filename: str) -> Path | None:
+    if not filename:
+        return None
+
+    candidate = (DATA_SRC_DIR / filename).resolve()
+    try:
+        candidate.relative_to(DATA_SRC_DIR.resolve())
+    except ValueError:
+        return None
+
+    if candidate.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"} or not candidate.exists() or not candidate.is_file():
+        return None
+    return candidate
+
+
+def sanitize_scene_overlay_filename(filename: str) -> str:
+    normalized = Path(filename or "").name.strip()
+    if not normalized:
+        raise ValueError("filename is required.")
+
+    suffix = Path(normalized).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise ValueError("overlay image must be png, jpg, jpeg, or webp.")
+
+    stem = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", Path(normalized).stem).strip(" ._")
+    if not stem:
+        stem = "overlay"
+    return f"{stem}{suffix}"
+
+
+def build_scene_overlay_storage_path(filename: str) -> Path:
+    safe_name = sanitize_scene_overlay_filename(filename)
+    candidate = DATA_SRC_DIR / safe_name
+    if not candidate.exists():
+        return candidate
+
+    stem = candidate.stem
+    suffix = candidate.suffix
+    index = 2
+    while True:
+        indexed_candidate = DATA_SRC_DIR / f"{stem}_{index}{suffix}"
+        if not indexed_candidate.exists():
+            return indexed_candidate
+        index += 1
+
+
+def save_scene_base_image(file_storage) -> tuple[str, str, str]:
+    SCENE_BASE_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_name = f"{datetime.now().strftime('%y%m%d_%H%M%S')}_{secrets.token_hex(4)}.png"
+    output_path = SCENE_BASE_OUTPUTS_DIR / output_name
+    display_name = Path(file_storage.filename or output_name).name
+
+    image = Image.open(BytesIO(file_storage.read())).convert("RGBA")
+    image.save(output_path)
+    return output_name, f"/outputs/{output_path.relative_to(OUTPUTS_DIR)}", display_name
+
+
+def save_scene_overlay_image(file_storage) -> tuple[str, str, str]:
+    DATA_SRC_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = build_scene_overlay_storage_path(file_storage.filename or "")
+    output_name = output_path.name
+    suffix = output_path.suffix.lower()
+    display_name = Path(file_storage.filename or output_name).name
+
+    image = Image.open(BytesIO(file_storage.read())).convert("RGBA")
+    if suffix in {".jpg", ".jpeg"}:
+        rgb_image = Image.new("RGB", image.size, (255, 255, 255))
+        rgb_image.paste(image, mask=image.getchannel("A"))
+        rgb_image.save(output_path, format="JPEG", quality=95)
+    elif suffix == ".webp":
+        image.save(output_path, format="WEBP")
+    else:
+        image.save(output_path, format="PNG")
+    return output_name, f"/data/src/{output_name}", display_name
+
+
+def build_unique_overlay_asset_storage_path(filename: str) -> Path:
+    safe_name = sanitize_scene_overlay_filename(filename)
+    candidate = OVERLAY_IMAGE_LIBRARY_DIR / safe_name
+    if not candidate.exists():
+        return candidate
+
+    stem = candidate.stem
+    suffix = candidate.suffix
+    index = 2
+    while True:
+        indexed_candidate = OVERLAY_IMAGE_LIBRARY_DIR / f"{stem}_{index}{suffix}"
+        if not indexed_candidate.exists():
+            return indexed_candidate
+        index += 1
+
+
+def build_overlay_asset_id(filename: str) -> str:
+    stem = Path(filename).stem
+    normalized = re.sub(r"[^0-9A-Za-z_-]+", "-", stem).strip("-_").lower()
+    return normalized or "overlay-image"
+
+
+def build_unique_overlay_asset_id(filename: str, records: list[dict]) -> str:
+    existing_ids = {str(record.get("id") or "").strip() for record in records}
+    base_id = build_overlay_asset_id(filename)
+    if base_id not in existing_ids:
+        return base_id
+
+    index = 2
+    while True:
+        candidate = f"{base_id}-{index}"
+        if candidate not in existing_ids:
+            return candidate
+        index += 1
+
+
+def list_registered_overlay_asset_items() -> list[dict]:
+    return load_registered_overlay_asset_records()
+
+
+def save_overlay_asset_image(file_storage) -> dict:
+    if file_storage is None or not file_storage.filename:
+        raise ValueError("file is required.")
+
+    OVERLAY_IMAGE_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = build_unique_overlay_asset_storage_path(file_storage.filename)
+    suffix = output_path.suffix.lower()
+    image = Image.open(BytesIO(file_storage.read())).convert("RGBA")
+    if suffix in {".jpg", ".jpeg"}:
+        rgb_image = Image.new("RGB", image.size, (255, 255, 255))
+        rgb_image.paste(image, mask=image.getchannel("A"))
+        rgb_image.save(output_path, format="JPEG", quality=95)
+    elif suffix == ".webp":
+        image.save(output_path, format="WEBP")
+    else:
+        image.save(output_path, format="PNG")
+
+    records = load_registered_overlay_asset_records()
+    record = {
+        "id": build_unique_overlay_asset_id(output_path.name, records),
+        "label": Path(file_storage.filename).stem or output_path.stem,
+        "filename": output_path.name,
+        "default_width": image.width,
+        "default_height": image.height,
+        "kind": "image",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    records.append(record)
+    save_registered_overlay_asset_records(records)
+    return record
+
+
+def delete_overlay_asset_image(asset_id: str) -> dict:
+    normalized_id = (asset_id or "").strip()
+    if not normalized_id:
+        raise ValueError("id is required.")
+
+    records = load_registered_overlay_asset_records()
+    target_record = None
+    kept_records = []
+    for record in records:
+        if str(record.get("id") or "").strip() == normalized_id:
+            target_record = record
+            continue
+        kept_records.append(record)
+
+    if target_record is None:
+        raise FileNotFoundError(f"overlay asset not found: {normalized_id}")
+
+    filename = Path(str(target_record.get("filename") or "")).name
+    if filename:
+        asset_path = (OVERLAY_IMAGE_LIBRARY_DIR / filename).resolve()
+        asset_path.relative_to(OVERLAY_IMAGE_LIBRARY_DIR.resolve())
+        if asset_path.exists() and asset_path.is_file():
+            asset_path.unlink()
+
+    save_registered_overlay_asset_records(kept_records)
+    return target_record
+
+
+def sanitize_settings_name(name: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip())
+    normalized = normalized.strip("._-")
+    if not normalized:
+        raise ValueError("settings_name is invalid.")
+    return normalized
+
+
+def build_settings_file_path(settings_name: str) -> Path:
+    return SETTINGS_DATA_DIR / f"{sanitize_settings_name(settings_name)}.json"
+
+
+def is_valid_settings_payload(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    required_keys = {
+        "presets_by_cache",
+        "portrait_states_by_cache",
+        "portrait_state",
+        "scene_state",
+        "scene_portrait_layouts",
+    }
+    return required_keys.issubset(payload.keys())
+
+
+def save_settings_payload(settings_name: str, payload: dict) -> dict:
+    if not is_valid_settings_payload(payload):
+        raise ValueError("payload is invalid.")
+
+    settings_name = sanitize_settings_name(settings_name)
+    SETTINGS_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    updated_at = datetime.now().isoformat(timespec="seconds")
+    record = {
+        "settings_name": settings_name,
+        "updated_at": updated_at,
+        "schema_version": 1,
+        "payload": payload,
+    }
+    build_settings_file_path(settings_name).write_text(
+        json.dumps(record, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return record
+
+
+def load_settings_record(settings_name: str) -> dict:
+    settings_path = build_settings_file_path(settings_name)
+    if not settings_path.exists():
+        raise FileNotFoundError(f"settings not found: {settings_name}")
+    record = json.loads(settings_path.read_text(encoding="utf-8"))
+    if not isinstance(record, dict) or not is_valid_settings_payload(record.get("payload")):
+        raise ValueError(f"settings file is invalid: {settings_name}")
+    return record
+
+
+def rename_settings_record(settings_name: str, new_settings_name: str) -> dict:
+    current_path = build_settings_file_path(settings_name)
+    if not current_path.exists():
+        raise FileNotFoundError(f"settings not found: {settings_name}")
+
+    target_name = sanitize_settings_name(new_settings_name)
+    current_record = load_settings_record(settings_name)
+    if current_record["settings_name"] == target_name:
+        return current_record
+
+    target_path = build_settings_file_path(target_name)
+    if target_path.exists():
+        raise ValueError(f"settings already exists: {target_name}")
+
+    current_record["settings_name"] = target_name
+    current_path.unlink()
+    target_path.write_text(json.dumps(current_record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return current_record
+
+
+def delete_settings_record(settings_name: str) -> None:
+    settings_path = build_settings_file_path(settings_name)
+    if not settings_path.exists():
+        raise FileNotFoundError(f"settings not found: {settings_name}")
+    settings_path.unlink()
+
+
+def list_settings_records() -> list[dict]:
+    if not SETTINGS_DATA_DIR.exists():
+        return []
+
+    items = []
+    for settings_path in sorted(SETTINGS_DATA_DIR.glob("*.json")):
+        try:
+            record = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        settings_name = record.get("settings_name")
+        updated_at = record.get("updated_at")
+        if not isinstance(settings_name, str) or not isinstance(updated_at, str):
+            continue
+
+        items.append(
+            {
+                "settings_name": settings_name,
+                "updated_at": updated_at,
+            }
+        )
+
+    items.sort(key=lambda item: item["updated_at"], reverse=True)
+    return items
+
+
+def build_layer_tree(layers: list[dict]) -> list[dict]:
+    by_id = {}
+    for layer in layers:
+        by_id[layer["id"]] = {
+            "id": layer["id"],
+            "name": layer["name"],
+            "type": layer["type"],
+            "visible": layer["visible"],
+            "depth": layer["depth"],
+            "children": [],
+        }
+
+    roots = []
+    for layer in layers:
+        node = by_id[layer["id"]]
+        if layer["parent_id"] is None:
+            roots.append(node)
+        else:
+            by_id[layer["parent_id"]]["children"].append(node)
+
+    def reverse_tree(nodes: list[dict]) -> list[dict]:
+        ordered = []
+        for node in reversed(nodes):
+            node["children"] = reverse_tree(node["children"])
+            ordered.append(node)
+        return ordered
+
+    return reverse_tree(roots)
+
+
+def order_layer_ids_for_compose(layers: list[dict], selected_layer_ids: list[str]) -> list[str]:
+    selected_ids = {int(layer_id) for layer_id in selected_layer_ids}
+    ordered_ids = []
+    for layer in layers:
+        if layer["type"] != "layer":
+            continue
+        if layer["id"] in selected_ids:
+            ordered_ids.append(str(layer["id"]))
+    return ordered_ids
+
+
+def sanitize_portrait_name(name: str) -> str | None:
+    sanitized = re.sub(r'[\\/:*?"<>|]+', "_", name.strip())
+    if sanitized.lower().endswith(".png"):
+        sanitized = sanitized[:-4]
+    sanitized = sanitized.strip(" ._")
+    return sanitized or None
+
+
+def execute_compose(
+    layers_json_path: Path,
+    selected_layer_ids: list[str],
+    output_kind: str,
+    output_name: str | None = None,
+) -> str:
+    payload = load_layers_json(layers_json_path)
+    ordered_layer_ids = order_layer_ids_for_compose(payload["layers"], selected_layer_ids)
+    command = [
+        sys.executable,
+        "src/compose.py",
+        "--layers-json",
+        str(layers_json_path),
+        "--layer-ids",
+        *ordered_layer_ids,
+        "--outputs-dir",
+        str(OUTPUTS_DIR),
+        "--output-kind",
+        output_kind,
+    ]
+    if output_name:
+        command.extend(["--output-name", output_name])
+    result = run_command(command)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "compose.py failed.")
+
+    output_png = Path(extract_output_value(result.stdout, "output png: "))
+    return str(output_png.relative_to(OUTPUTS_DIR))
+
+
+def render_portrait_page(
+    *,
+    selected_psd: str | None = None,
+    layers_json: str | None = None,
+    cache_key: str | None = None,
+    layer_tree: list[dict] | None = None,
+    selected_layer_ids: list[str] | None = None,
+    output_image: str | None = None,
+    error_message: str | None = None,
+):
+    return render_template(
+        "index.html",
+        psd_files=list_psd_files(),
+        selected_psd=selected_psd,
+        layers_json=layers_json,
+        cache_key=cache_key,
+        layer_tree=layer_tree or [],
+        selected_layer_ids=selected_layer_ids or [],
+        output_image=output_image,
+        error_message=error_message,
+    )
+
+
+def render_scene_page(
+    *,
+    preview_sources: list[dict] | None = None,
+    scene_image: str | None = None,
+    canvas_presets: dict[str, tuple[int, int]] | None = None,
+    selected_portrait_filename: str | None = None,
+    selected_portrait_url: str | None = None,
+    error_message: str | None = None,
+):
+    return render_template(
+        "scene.html",
+        preview_sources=preview_sources or list_preview_sources(),
+        scene_image=scene_image,
+        canvas_presets=canvas_presets or SCENE_CANVAS_PRESETS,
+        bubble_overlay_assets=list_registered_bubble_overlay_assets(),
+        selected_portrait_filename=selected_portrait_filename,
+        selected_portrait_url=selected_portrait_url,
+        error_message=error_message,
+    )
+
+
+def render_gallery_page(*, gallery_items: list[dict] | None = None):
+    return render_template(
+        "gallery.html",
+        portrait_gallery_items=gallery_items if gallery_items is not None else list_portrait_gallery_items(),
+        scene_gallery_items=list_scene_gallery_items(),
+    )
+
+
+def render_settings_page(*, error_message: str | None = None):
+    return render_template(
+        "settings.html",
+        error_message=error_message,
+    )
+
+
+def load_scene_character_input(
+    slot_name: str,
+    *,
+    default_enabled: bool = False,
+    default_cache_key: str = "",
+    default_portrait_filename: str = "",
+    default_x: int = 0,
+    default_y: int = 0,
+    default_scale: int = 100,
+) -> dict:
+    enabled_raw = request.form.get(f"{slot_name}_enabled")
+    if enabled_raw is None:
+        enabled = default_enabled
+    else:
+        enabled = enabled_raw in {"1", "true", "on"}
+
+    cache_key = (request.form.get(f"{slot_name}_cache_key") or default_cache_key).strip()
+    portrait_filename = (request.form.get(f"{slot_name}_portrait_filename") or default_portrait_filename).strip()
+    x = int(request.form.get(f"{slot_name}_x", str(default_x)))
+    y = int(request.form.get(f"{slot_name}_y", str(default_y)))
+    scale = int(request.form.get(f"{slot_name}_scale", str(default_scale)))
+
+    if scale <= 0:
+        raise ValueError(f"{slot_name}_scale must be greater than 0.")
+
+    if not enabled:
+        return {
+            "enabled": False,
+            "layer_id": slot_name,
+            "cache_key": cache_key,
+            "portrait_filename": portrait_filename,
+            "x": x,
+            "y": y,
+            "scale": scale,
+            "source": "",
+            "portrait": None,
+        }
+
+    if not cache_key and not portrait_filename:
+        return {
+            "enabled": False,
+            "layer_id": slot_name,
+            "cache_key": cache_key,
+            "portrait_filename": portrait_filename,
+            "x": x,
+            "y": y,
+            "scale": scale,
+            "source": "",
+            "portrait": None,
+        }
+
+    portrait_path = resolve_portrait_output_path(portrait_filename)
+    portrait_source = portrait_filename
+    if portrait_path is None:
+        if not cache_key:
+            raise ValueError(f"{slot_name}_cache_key or {slot_name}_portrait_filename is required.")
+        portrait_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.png"
+        portrait_source = cache_key
+        if not portrait_path.exists():
+            raise FileNotFoundError(f"preview image not found for cache_key: {cache_key}")
+
+    portrait = Image.open(portrait_path).convert("RGBA")
+    return {
+        "enabled": True,
+        "layer_id": slot_name,
+        "cache_key": cache_key,
+        "portrait_filename": portrait_filename,
+        "x": x,
+        "y": y,
+        "scale": scale,
+        "source": portrait_source,
+        "portrait": portrait,
+    }
+
+
+def load_scene_text_input(prefix: str = "text") -> dict:
+    enabled_raw = request.form.get(f"{prefix}_enabled")
+    enabled = enabled_raw in {"1", "true", "on"}
+    stroke_enabled_raw = request.form.get(f"{prefix}_stroke_enabled")
+    stroke_enabled = stroke_enabled_raw in {"1", "true", "on"}
+    value = (request.form.get(f"{prefix}_value") or "").replace("\r\n", "\n")
+    x = int(request.form.get(f"{prefix}_x", "100" if prefix == "text2" else "0"))
+    y = int(request.form.get(f"{prefix}_y", "100" if prefix == "text2" else "0"))
+    size = int(request.form.get(f"{prefix}_size", "64" if prefix == "text2" else "32"))
+    color = (request.form.get(f"{prefix}_color") or "#ffffff").strip() or "#ffffff"
+    stroke_color = (request.form.get(f"{prefix}_stroke_color") or "#000000").strip() or "#000000"
+    stroke_width = int(request.form.get(f"{prefix}_stroke_width", "2"))
+    font_name = (request.form.get(f"{prefix}_font") or "").strip()
+
+    if size <= 0:
+        raise ValueError(f"{prefix}_size must be greater than 0.")
+    if stroke_width < 0:
+        raise ValueError(f"{prefix}_stroke_width must be 0 or greater.")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise ValueError(f"{prefix}_color is invalid.")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", stroke_color):
+        raise ValueError(f"{prefix}_stroke_color is invalid.")
+
+    font_path = None
+    if font_name:
+        font_path = resolve_font_file_path(font_name)
+        if not font_path.exists() or not font_path.is_file():
+            raise FileNotFoundError(f"font file not found: {font_name}")
+
+    return {
+        "enabled": enabled,
+        "value": value,
+        "x": x,
+        "y": y,
+        "size": size,
+        "color": color,
+        "stroke_enabled": stroke_enabled,
+        "stroke_color": stroke_color,
+        "stroke_width": stroke_width,
+        "font": font_name,
+        "font_path": font_path,
+    }
+
+
+def load_scene_bubble_overlay_input() -> dict:
+    enabled_raw = request.form.get("bubble_overlay_enabled")
+    enabled = enabled_raw in {"1", "true", "on"}
+    source_type = (request.form.get("bubble_overlay_source_type") or "asset").strip() or "asset"
+    asset_id = (request.form.get("bubble_overlay_asset") or "").strip()
+    upload_file = (request.form.get("bubble_overlay_upload_file") or "").strip()
+    x = int(request.form.get("bubble_overlay_x", "180"))
+    y = int(request.form.get("bubble_overlay_y", "220"))
+    width_raw = (request.form.get("bubble_overlay_width") or "").strip()
+    height_raw = (request.form.get("bubble_overlay_height") or "").strip()
+    if source_type not in {"asset", "file"}:
+        raise ValueError("bubble_overlay_source_type is invalid.")
+
+    if source_type == "asset":
+        try:
+            width, height = build_bubble_overlay_size(
+                asset_id,
+                int(width_raw) if width_raw else None,
+                int(height_raw) if height_raw else None,
+            )
+        except ValueError:
+            enabled = False
+            width = int(width_raw) if width_raw else 420
+            height = int(height_raw) if height_raw else 180
+    else:
+        width = int(width_raw) if width_raw else 420
+        height = int(height_raw) if height_raw else 180
+
+    if width <= 0:
+        raise ValueError("bubble_overlay_width must be greater than 0.")
+    if height <= 0:
+        raise ValueError("bubble_overlay_height must be greater than 0.")
+
+    return {
+        "enabled": enabled,
+        "source_type": source_type,
+        "asset": asset_id,
+        "upload_file": upload_file,
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+    }
+
+
+def measure_multiline_text_layout(
+    draw: ImageDraw.ImageDraw,
+    *,
+    text_value: str,
+    font: ImageFont.ImageFont | ImageFont.FreeTypeFont,
+    stroke_width: int,
+    spacing: int,
+    align: str = "left",
+) -> dict:
+    text_bbox = draw.multiline_textbbox(
+        (0, 0),
+        text_value,
+        font=font,
+        spacing=spacing,
+        stroke_width=stroke_width,
+        align=align,
+    )
+    return {
+        "bbox": text_bbox,
+        "width": text_bbox[2] - text_bbox[0],
+        "height": text_bbox[3] - text_bbox[1],
+        "draw_offset_x": -text_bbox[0],
+        "draw_offset_y": -text_bbox[1],
+    }
+
+
+def build_scene_bubble_overlay_layout(bubble_overlay: dict, position_scale: float) -> dict | None:
+    if not bubble_overlay["enabled"]:
+        return None
+    if bubble_overlay["source_type"] == "file" and not bubble_overlay["upload_file"]:
+        return None
+    if bubble_overlay["source_type"] not in {"asset", "file"}:
+        return None
+    return {
+        "source_type": bubble_overlay["source_type"],
+        "asset": bubble_overlay["asset"],
+        "upload_file": bubble_overlay["upload_file"],
+        "x": round(bubble_overlay["x"] * position_scale),
+        "y": round(bubble_overlay["y"] * position_scale),
+        "width": max(1, round(bubble_overlay["width"] * position_scale)),
+        "height": max(1, round(bubble_overlay["height"] * position_scale)),
+    }
+
+
+def build_scene_text_layout(
+    draw: ImageDraw.ImageDraw,
+    *,
+    text: dict,
+    position_scale: float,
+) -> dict | None:
+    if not text["enabled"] or not text["value"]:
+        return None
+
+    text_size = max(1, round(text["size"] * position_scale))
+    stroke_width = max(0, round(text["stroke_width"] * position_scale))
+    if text["font_path"] is not None:
+        font = ImageFont.truetype(str(text["font_path"]), text_size)
+    else:
+        try:
+            font = ImageFont.load_default(text_size)
+        except TypeError:
+            font = ImageFont.load_default()
+
+    spacing = max(4, round(text_size * 0.2))
+    stroke_for_text = stroke_width if text["stroke_enabled"] else 0
+    draw_text_value = text["value"]
+    text_layout = measure_multiline_text_layout(
+        draw,
+        text_value=draw_text_value,
+        font=font,
+        spacing=spacing,
+        stroke_width=stroke_for_text,
+    )
+    origin_x = round(text["x"] * position_scale)
+    origin_y = round(text["y"] * position_scale)
+
+    text_origin = (
+        origin_x + text_layout["draw_offset_x"],
+        origin_y + text_layout["draw_offset_y"],
+    )
+    return {
+        "text_origin": {
+            "x": text_origin[0],
+            "y": text_origin[1],
+        },
+        "text_box_rect": {
+            "x": origin_x,
+            "y": origin_y,
+            "width": text_layout["width"],
+            "height": text_layout["height"],
+        },
+        "wrapped_text": draw_text_value,
+        "text_align": "left",
+        "text_size": text_size,
+        "line_spacing": spacing,
+        "stroke_width": stroke_for_text,
+    }
+
+
+def parse_hex_color_rgba(color: str, opacity: float) -> tuple[int, int, int, int]:
+    normalized = color.lstrip("#")
+    return (
+        int(normalized[0:2], 16),
+        int(normalized[2:4], 16),
+        int(normalized[4:6], 16),
+        max(0, min(255, round(opacity * 255))),
+    )
+
+
+def load_message_band_input() -> dict:
+    enabled_raw = request.form.get("message_band_enabled")
+    enabled = enabled_raw in {"1", "true", "on"}
+    x = int(request.form.get("message_band_x", "0"))
+    y = int(request.form.get("message_band_y", "760"))
+    width = int(request.form.get("message_band_width", "1920"))
+    height = int(request.form.get("message_band_height", "220"))
+    color = (request.form.get("message_band_color") or "#000000").strip() or "#000000"
+    opacity = float(request.form.get("message_band_opacity", "0.65"))
+
+    if width <= 0:
+        raise ValueError("message_band_width must be greater than 0.")
+    if height <= 0:
+        raise ValueError("message_band_height must be greater than 0.")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise ValueError("message_band_color is invalid.")
+    if opacity < 0 or opacity > 1:
+        raise ValueError("message_band_opacity must be between 0 and 1.")
+
+    return {
+        "enabled": enabled,
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "color": color,
+        "opacity": opacity,
+    }
+
+
+def build_message_band_layout(message_band: dict, position_scale: float) -> dict | None:
+    if not message_band["enabled"]:
+        return None
+    return {
+        "x": round(message_band["x"] * position_scale),
+        "y": round(message_band["y"] * position_scale),
+        "width": max(1, round(message_band["width"] * position_scale)),
+        "height": max(1, round(message_band["height"] * position_scale)),
+        "color": message_band["color"],
+        "opacity": message_band["opacity"],
+    }
+
+
+def normalize_scene_layer_order(raw_order) -> list[str]:
+    if isinstance(raw_order, str):
+        try:
+            parsed_order = json.loads(raw_order)
+        except json.JSONDecodeError:
+            parsed_order = raw_order.split(",")
+    else:
+        parsed_order = raw_order
+
+    normalized = []
+    if isinstance(parsed_order, list):
+        for layer_id in parsed_order:
+            if layer_id in DEFAULT_SCENE_LAYER_ORDER and layer_id not in normalized:
+                normalized.append(layer_id)
+    for layer_id in DEFAULT_SCENE_LAYER_ORDER:
+        if layer_id not in normalized:
+            normalized.append(layer_id)
+    return normalized
+
+
+def normalize_scene_layer_order_mode(raw_mode) -> str:
+    return raw_mode if raw_mode in {"aviutl", "after_effects"} else DEFAULT_SCENE_LAYER_ORDER_MODE
+
+
+def resolve_scene_layer_draw_order(layer_order, layer_order_mode: str) -> list[str]:
+    normalized_order = normalize_scene_layer_order(layer_order)
+    if normalize_scene_layer_order_mode(layer_order_mode) == "after_effects":
+        return list(reversed(normalized_order))
+    return normalized_order
+
+
+def load_scene_layer_order() -> list[str]:
+    return normalize_scene_layer_order(request.form.get("layer_order") or "")
+
+
+def load_scene_layer_order_mode() -> str:
+    return normalize_scene_layer_order_mode(request.form.get("layer_order_mode") or "")
+
+
+def draw_message_band(result: Image.Image, message_band: dict, position_scale: float) -> None:
+    layout = build_message_band_layout(message_band, position_scale)
+    if layout is None:
+        return
+    band = Image.new("RGBA", result.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(band)
+    draw.rectangle(
+        (
+            layout["x"],
+            layout["y"],
+            layout["x"] + layout["width"],
+            layout["y"] + layout["height"],
+        ),
+        fill=parse_hex_color_rgba(layout["color"], layout["opacity"]),
+    )
+    result.alpha_composite(band)
+
+
+def draw_scene_text(result: Image.Image, text: dict, position_scale: float) -> None:
+    if not text["enabled"] or not text["value"]:
+        return
+
+    draw = ImageDraw.Draw(result)
+    text_layout = build_scene_text_layout(draw, text=text, position_scale=position_scale)
+    if text_layout is None:
+        return
+
+    if text["font_path"] is not None:
+        font = ImageFont.truetype(str(text["font_path"]), text_layout["text_size"])
+    else:
+        try:
+            font = ImageFont.load_default(text_layout["text_size"])
+        except TypeError:
+            font = ImageFont.load_default()
+    draw.multiline_text(
+        (text_layout["text_origin"]["x"], text_layout["text_origin"]["y"]),
+        text_layout["wrapped_text"],
+        fill=text["color"],
+        font=font,
+        spacing=text_layout["line_spacing"],
+        align=text_layout["text_align"],
+        stroke_width=text_layout["stroke_width"],
+        stroke_fill=text["stroke_color"] if text["stroke_enabled"] else None,
+    )
+
+
+def load_scene_inputs() -> tuple[Image.Image, list[dict], dict, dict, dict, dict, list[str], str, str, str, str, int, int, int]:
+    base_image = request.files.get("base_image")
+    base_image_name = (request.form.get("base_image_name") or "").strip()
+    canvas_preset = (request.form.get("canvas_preset") or "").strip()
+    base_fit_mode = (request.form.get("base_fit_mode") or "contain").strip()
+    base_scale = int(request.form.get("base_scale", "100"))
+    base_x = int(request.form.get("base_x", "0"))
+    base_y = int(request.form.get("base_y", "0"))
+
+    if base_scale <= 0:
+        raise ValueError("base_scale must be greater than 0.")
+    if canvas_preset not in SCENE_CANVAS_PRESETS:
+        raise ValueError("canvas_preset is invalid.")
+    if base_fit_mode not in {"contain", "cover"}:
+        raise ValueError("base_fit_mode is invalid.")
+
+    if base_image is not None and base_image.filename:
+        base = Image.open(BytesIO(base_image.read())).convert("RGBA")
+    else:
+        base_image_path = resolve_scene_base_output_path(base_image_name)
+        if base_image_path is None:
+            raise ValueError("base_image or base_image_name is required.")
+        base = Image.open(base_image_path).convert("RGBA")
+
+    characters = [
+        load_scene_character_input(
+            "character1",
+            default_enabled=bool(
+                (request.form.get("cache_key") or "").strip()
+                or (request.form.get("portrait_filename") or "").strip()
+            ),
+            default_cache_key=(request.form.get("cache_key") or "").strip(),
+            default_portrait_filename=(request.form.get("portrait_filename") or "").strip(),
+            default_x=int(request.form.get("x", "0")),
+            default_y=int(request.form.get("y", "0")),
+            default_scale=int(request.form.get("scale", "100")),
+        ),
+        load_scene_character_input("character2"),
+    ]
+    active_characters = [character for character in characters if character["enabled"]]
+    if not active_characters:
+        raise ValueError("at least one character must be enabled.")
+
+    text = load_scene_text_input("text")
+    text2 = load_scene_text_input("text2")
+    message_band = load_message_band_input()
+    bubble_overlay = load_scene_bubble_overlay_input()
+    layer_order = load_scene_layer_order()
+    layer_order_mode = load_scene_layer_order_mode()
+    preview_stem = "scene"
+    return base, active_characters, text, text2, message_band, bubble_overlay, layer_order, layer_order_mode, preview_stem, canvas_preset, base_fit_mode, base_scale, base_x, base_y
+
+
+def fit_image_to_canvas(
+    image: Image.Image,
+    canvas_size: tuple[int, int],
+    fit_mode: str,
+    base_scale: int,
+    base_x: int,
+    base_y: int,
+    *,
+    preview: bool,
+) -> tuple[Image.Image, tuple[int, int]]:
+    canvas_width, canvas_height = canvas_size
+    if fit_mode == "cover":
+        fit_scale = max(canvas_width / image.width, canvas_height / image.height)
+    else:
+        fit_scale = min(canvas_width / image.width, canvas_height / image.height)
+
+    preview_scale = SCENE_PREVIEW_SCALE if preview else 1.0
+    scale = fit_scale * (base_scale / 100)
+    resized_size = (
+        max(1, round(image.width * scale)),
+        max(1, round(image.height * scale)),
+    )
+    resized = image.resize(resized_size, Image.Resampling.LANCZOS)
+    offset = (
+        (canvas_width - resized.width) // 2,
+        (canvas_height - resized.height) // 2,
+    )
+    offset = (
+        offset[0] + round(base_x * preview_scale),
+        offset[1] + round(base_y * preview_scale),
+    )
+    return resized, offset
+
+
+def build_canvas_size(canvas_preset: str, preview: bool) -> tuple[int, int]:
+    width, height = SCENE_CANVAS_PRESETS[canvas_preset]
+    if not preview:
+        return width, height
+    return (
+        max(1, round(width * SCENE_PREVIEW_SCALE)),
+        max(1, round(height * SCENE_PREVIEW_SCALE)),
+    )
+
+
+def compose_scene(
+    base: Image.Image,
+    characters: list[dict],
+    text: dict,
+    text2: dict,
+    message_band: dict,
+    bubble_overlay: dict,
+    layer_order: list[str],
+    layer_order_mode: str,
+    canvas_preset: str,
+    base_fit_mode: str,
+    base_scale: int,
+    base_x: int,
+    base_y: int,
+    *,
+    preview: bool,
+) -> Image.Image:
+    canvas_size = build_canvas_size(canvas_preset, preview)
+    position_scale = SCENE_PREVIEW_SCALE if preview else 1.0
+    result = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    fitted_base, base_offset = fit_image_to_canvas(
+        base,
+        canvas_size,
+        base_fit_mode,
+        base_scale,
+        base_x,
+        base_y,
+        preview=preview,
+    )
+    characters_by_layer = {character["layer_id"]: character for character in characters}
+
+    def draw_base_layer() -> None:
+        result.alpha_composite(fitted_base, base_offset)
+
+    def draw_character_layer(character: dict | None) -> None:
+        if character is None:
+            return
+        portrait_image = character["portrait"]
+        portrait_scale = (character["scale"] / 100) * position_scale
+        if portrait_scale != 1.0:
+            scaled_width = max(1, round(portrait_image.width * portrait_scale))
+            scaled_height = max(1, round(portrait_image.height * portrait_scale))
+            portrait_image = portrait_image.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+
+        result.alpha_composite(
+            portrait_image,
+            (
+                round(character["x"] * position_scale),
+                round(character["y"] * position_scale),
+            ),
+        )
+
+    def draw_overlay_layer() -> None:
+        bubble_overlay_layout = build_scene_bubble_overlay_layout(bubble_overlay, position_scale)
+        if bubble_overlay_layout is None:
+            return
+        if bubble_overlay_layout["source_type"] == "asset":
+            overlay_image = rasterize_bubble_overlay_asset(
+                bubble_overlay_layout["asset"],
+                bubble_overlay_layout["width"],
+                bubble_overlay_layout["height"],
+            )
+        else:
+            overlay_path = resolve_scene_overlay_output_path(bubble_overlay_layout["upload_file"])
+            if overlay_path is None:
+                raise FileNotFoundError(f"scene overlay image not found: {bubble_overlay_layout['upload_file']}")
+            overlay_image = Image.open(overlay_path).convert("RGBA").resize(
+                (bubble_overlay_layout["width"], bubble_overlay_layout["height"]),
+                Image.Resampling.LANCZOS,
+            )
+        result.alpha_composite(overlay_image, (bubble_overlay_layout["x"], bubble_overlay_layout["y"]))
+
+    draw_actions = {
+        "base_image": draw_base_layer,
+        "message_band": lambda: draw_message_band(result, message_band, position_scale),
+        "character1": lambda: draw_character_layer(characters_by_layer.get("character1")),
+        "character2": lambda: draw_character_layer(characters_by_layer.get("character2")),
+        "overlay_image": draw_overlay_layer,
+        "text2": lambda: draw_scene_text(result, text2, position_scale),
+        "text1": lambda: draw_scene_text(result, text, position_scale),
+    }
+    for layer_id in resolve_scene_layer_draw_order(layer_order, layer_order_mode):
+        draw_actions[layer_id]()
+    return result
+
+
+@app.get("/")
+def index():
+    return render_portrait_page()
+
+
+@app.get("/scene")
+def scene_page():
+    selected_portrait_filename = (request.args.get("portrait") or "").strip()
+    selected_portrait_path = resolve_portrait_output_path(selected_portrait_filename)
+    if selected_portrait_path is None:
+        return render_scene_page()
+
+    return render_scene_page(
+        selected_portrait_filename=selected_portrait_path.name,
+        selected_portrait_url=f"/outputs/{selected_portrait_path.relative_to(OUTPUTS_DIR)}",
+    )
+
+
+@app.get("/gallery")
+def gallery_page():
+    return render_gallery_page()
+
+
+@app.get("/settings")
+def settings_page():
+    return render_settings_page()
+
+
+@app.post("/api/files/psd/upload")
+def psd_upload_api():
+    try:
+        uploaded_file = request.files.get("file")
+        if uploaded_file is None or not uploaded_file.filename:
+            raise ValueError("file is required.")
+
+        output_name = sanitize_psd_filename(uploaded_file.filename)
+        output_path = build_psd_storage_path(output_name)
+        if output_path.exists():
+            raise ValueError(f"PSD already exists: {output_name}")
+
+        DATA_PSD_DIR.mkdir(parents=True, exist_ok=True)
+        uploaded_file.save(output_path)
+        return jsonify({"ok": True, "name": output_name})
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/files/font/upload")
+def font_upload_api():
+    try:
+        uploaded_file = request.files.get("file")
+        if uploaded_file is None or not uploaded_file.filename:
+            raise ValueError("file is required.")
+
+        output_name = sanitize_font_filename(uploaded_file.filename)
+        output_path = build_font_storage_path(output_name)
+        if output_path.exists():
+            raise ValueError(f"font already exists: {output_name}")
+
+        DATA_FONT_DIR.mkdir(parents=True, exist_ok=True)
+        uploaded_file.save(output_path)
+        return jsonify({"ok": True, "name": output_name})
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/api/files/font/list")
+def font_list_api():
+    return jsonify({"ok": True, "items": list_font_file_items()})
+
+
+@app.get("/api/overlay_assets/list")
+def overlay_assets_list_api():
+    return jsonify(
+        {
+            "ok": True,
+            "items": list_registered_overlay_asset_items(),
+            "metadata_path": str(OVERLAY_ASSETS_METADATA_PATH.relative_to(ROOT_DIR)),
+            "asset_dir": str(OVERLAY_IMAGE_LIBRARY_DIR.relative_to(ROOT_DIR)),
+        }
+    )
+
+
+@app.post("/api/overlay_assets/upload")
+def overlay_assets_upload_api():
+    try:
+        uploaded_file = request.files.get("file")
+        record = save_overlay_asset_image(uploaded_file)
+        return jsonify({"ok": True, "item": record})
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/overlay_assets/delete")
+def overlay_assets_delete_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        asset_id = (data.get("id") or "").strip()
+        record = delete_overlay_asset_image(asset_id)
+        return jsonify({"ok": True, "item": record})
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/files/font/delete")
+def font_delete_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        name = (data.get("name") or "").strip()
+        if not name:
+            raise ValueError("name is required.")
+
+        deleted_name = delete_font_file(name)
+        return jsonify({"ok": True, "name": deleted_name})
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/fonts/<path:filename>")
+def font_file(filename: str):
+    try:
+        font_path = resolve_font_file_path(filename)
+        if not font_path.exists() or not font_path.is_file():
+            raise FileNotFoundError(filename)
+        return send_from_directory(DATA_FONT_DIR, font_path.name)
+    except (FileNotFoundError, OSError, ValueError):
+        return jsonify({"ok": False, "error": "font file not found."}), 404
+
+
+@app.get("/api/files/psd/list")
+def psd_list_api():
+    return jsonify({"ok": True, "items": list_psd_file_items()})
+
+
+@app.post("/api/files/psd/delete")
+def psd_delete_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        name = (data.get("name") or "").strip()
+        if not name:
+            raise ValueError("name is required.")
+
+        result = delete_psd_with_cache(name)
+        return jsonify({"ok": True, **result})
+    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/gallery/delete")
+def gallery_delete_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        name = (data.get("name") or "").strip()
+        kind = (data.get("kind") or "portrait").strip()
+        deleted_name = delete_gallery_output(name, kind)
+        return jsonify({"ok": True, "name": deleted_name, "kind": kind})
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/api/settings/list")
+def settings_list_api():
+    return jsonify({"ok": True, "items": list_settings_records()})
+
+
+@app.get("/api/settings")
+def settings_get_api():
+    try:
+        settings_name = request.args.get("settings_name", "").strip()
+        if not settings_name:
+            raise ValueError("settings_name is required.")
+
+        record = load_settings_record(settings_name)
+        return jsonify(
+            {
+                "ok": True,
+                "settings_name": record["settings_name"],
+                "updated_at": record["updated_at"],
+                "payload": record["payload"],
+            }
+        )
+    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/settings")
+def settings_save_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        settings_name = (data.get("settings_name") or "").strip()
+        payload = data.get("payload")
+        if not settings_name:
+            raise ValueError("settings_name is required.")
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be an object.")
+
+        record = save_settings_payload(settings_name, payload)
+        return jsonify(
+            {
+                "ok": True,
+                "settings_name": record["settings_name"],
+                "updated_at": record["updated_at"],
+            }
+        )
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/settings/rename")
+def settings_rename_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        settings_name = (data.get("settings_name") or "").strip()
+        new_settings_name = (data.get("new_settings_name") or "").strip()
+        if not settings_name:
+            raise ValueError("settings_name is required.")
+        if not new_settings_name:
+            raise ValueError("new_settings_name is required.")
+
+        record = rename_settings_record(settings_name, new_settings_name)
+        return jsonify(
+            {
+                "ok": True,
+                "settings_name": record["settings_name"],
+                "updated_at": record["updated_at"],
+            }
+        )
+    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/settings/delete")
+def settings_delete_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        settings_name = (data.get("settings_name") or "").strip()
+        if not settings_name:
+            raise ValueError("settings_name is required.")
+
+        delete_settings_record(settings_name)
+        return jsonify({"ok": True, "settings_name": sanitize_settings_name(settings_name)})
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/composite")
+def legacy_scene_page_redirect():
+    return redirect(url_for("scene_page"), code=302)
+
+
+@app.post("/load_psd")
+def load_psd():
+    selected_psd = request.form.get("psd_path", "").strip()
+    if not selected_psd:
+        return render_portrait_page(error_message="PSD を選択してください。")
+
+    try:
+        psd_path = resolve_psd_path(selected_psd)
+        payload, layers_json_path = load_or_build_psd_layers(psd_path)
+        return render_portrait_page(
+            selected_psd=selected_psd,
+            layers_json=str(layers_json_path.relative_to(ROOT_DIR)),
+            cache_key=payload["psd_source"]["cache_key"],
+            layer_tree=build_layer_tree(payload["layers"]),
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        return render_portrait_page(selected_psd=selected_psd, error_message=str(exc))
+
+
+@app.post("/compose")
+def compose():
+    selected_psd = request.form.get("psd_path", "").strip()
+    layers_json = request.form.get("layers_json", "").strip()
+    selected_layer_ids = request.form.getlist("layer_ids")
+
+    if not selected_psd or not layers_json:
+        return render_portrait_page(error_message="PSD を読み込んでから合成してください。")
+    if not selected_layer_ids:
+        try:
+            payload = load_layers_json(resolve_project_path(layers_json))
+            return render_portrait_page(
+                selected_psd=selected_psd,
+                layers_json=layers_json,
+                cache_key=payload["psd_source"]["cache_key"],
+                layer_tree=build_layer_tree(payload["layers"]),
+                error_message="合成するレイヤーを1つ以上選択してください。",
+            )
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+            return render_portrait_page(
+                selected_psd=selected_psd,
+                layers_json=layers_json,
+                error_message=str(exc),
+            )
+
+    try:
+        layers_json_path = resolve_project_path(layers_json)
+        payload = load_layers_json(layers_json_path)
+        output_image = execute_compose(layers_json_path, selected_layer_ids, "preview")
+        return render_portrait_page(
+            selected_psd=selected_psd,
+            layers_json=layers_json,
+            cache_key=payload["psd_source"]["cache_key"],
+            layer_tree=build_layer_tree(payload["layers"]),
+            selected_layer_ids=selected_layer_ids,
+            output_image=output_image,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        return render_portrait_page(
+            selected_psd=selected_psd,
+            layers_json=layers_json,
+            selected_layer_ids=selected_layer_ids,
+            error_message=str(exc),
+        )
+
+
+@app.post("/api/compose")
+def compose_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        cache_key = (data.get("cache_key") or "").strip()
+        checked_ids = data.get("checked_ids") or []
+
+        if not cache_key:
+            raise ValueError("cache_key is required.")
+        if not isinstance(checked_ids, list):
+            raise ValueError("checked_ids must be a list.")
+
+        selected_layer_ids = [str(int(layer_id)) for layer_id in checked_ids]
+        if not selected_layer_ids:
+            raise ValueError("checked_ids must contain at least one layer id.")
+
+        layers_json_path = ROOT_DIR / "cache" / cache_key / "layers.json"
+        output_image = execute_compose(layers_json_path, selected_layer_ids, "preview")
+        return jsonify({"ok": True, "image_url": f"/outputs/{output_image}"})
+    except (FileNotFoundError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/save_portrait")
+def save_portrait_api():
+    try:
+        data = request.get_json(silent=True) or {}
+        cache_key = (data.get("cache_key") or "").strip()
+        checked_ids = data.get("checked_ids") or []
+        portrait_name = data.get("name")
+
+        if not cache_key:
+            raise ValueError("cache_key is required.")
+        if not isinstance(checked_ids, list):
+            raise ValueError("checked_ids must be a list.")
+        if portrait_name is not None and not isinstance(portrait_name, str):
+            raise ValueError("name must be a string.")
+
+        selected_layer_ids = [str(int(layer_id)) for layer_id in checked_ids]
+        if not selected_layer_ids:
+            raise ValueError("checked_ids must contain at least one layer id.")
+
+        layers_json_path = ROOT_DIR / "cache" / cache_key / "layers.json"
+        output_image = execute_compose(
+            layers_json_path,
+            selected_layer_ids,
+            "portrait",
+            sanitize_portrait_name(portrait_name or ""),
+        )
+        return jsonify({"ok": True, "image_url": f"/outputs/{output_image}"})
+    except (FileNotFoundError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/scene")
+def scene_api():
+    try:
+        (
+            base,
+            characters,
+            text,
+            text2,
+            message_band,
+            bubble_overlay,
+            layer_order,
+            layer_order_mode,
+            _,
+            canvas_preset,
+            base_fit_mode,
+            base_scale,
+            base_x,
+            base_y,
+        ) = load_scene_inputs()
+        result = compose_scene(
+            base,
+            characters,
+            text,
+            text2,
+            message_band,
+            bubble_overlay,
+            layer_order,
+            layer_order_mode,
+            canvas_preset,
+            base_fit_mode,
+            base_scale,
+            base_x,
+            base_y,
+            preview=False,
+        )
+        output_path = build_output_history_path(SCENE_OUTPUTS_DIR)
+        result.save(output_path)
+
+        return jsonify({"ok": True, "image_url": f"/outputs/{output_path.relative_to(OUTPUTS_DIR)}"})
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/scene_base_image")
+def scene_base_image_api():
+    try:
+        base_image = request.files.get("base_image")
+        if base_image is None or not base_image.filename:
+            raise ValueError("base_image is required.")
+
+        base_image_name, base_image_url, base_image_display_name = save_scene_base_image(base_image)
+        return jsonify(
+            {
+                "ok": True,
+                "base_image_name": base_image_name,
+                "base_image_url": base_image_url,
+                "base_image_display_name": base_image_display_name,
+            }
+        )
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/scene_overlay_image")
+def scene_overlay_image_api():
+    try:
+        overlay_image = request.files.get("overlay_image")
+        if overlay_image is None or not overlay_image.filename:
+            raise ValueError("overlay_image is required.")
+
+        overlay_name, overlay_url, overlay_display_name = save_scene_overlay_image(overlay_image)
+        return jsonify(
+            {
+                "ok": True,
+                "overlay_name": overlay_name,
+                "overlay_url": overlay_url,
+                "overlay_display_name": overlay_display_name,
+            }
+        )
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/composite")
+def legacy_scene_api():
+    return scene_api()
+
+
+@app.post("/api/scene_preview")
+def scene_preview_api():
+    try:
+        (
+            base,
+            characters,
+            text,
+            text2,
+            message_band,
+            bubble_overlay,
+            layer_order,
+            layer_order_mode,
+            cache_key,
+            canvas_preset,
+            base_fit_mode,
+            base_scale,
+            base_x,
+            base_y,
+        ) = load_scene_inputs()
+        result = compose_scene(
+            base,
+            characters,
+            text,
+            text2,
+            message_band,
+            bubble_overlay,
+            layer_order,
+            layer_order_mode,
+            canvas_preset,
+            base_fit_mode,
+            base_scale,
+            base_x,
+            base_y,
+            preview=True,
+        )
+        output_path = build_overwrite_output_path(SCENE_PREVIEW_OUTPUTS_DIR, cache_key)
+        result.save(output_path)
+        layout_canvas = Image.new("RGBA", build_canvas_size(canvas_preset, True), (0, 0, 0, 0))
+        layout_draw = ImageDraw.Draw(layout_canvas)
+        preview_message_band_layout = build_message_band_layout(message_band, SCENE_PREVIEW_SCALE)
+        preview_bubble_overlay_layout = build_scene_bubble_overlay_layout(bubble_overlay, SCENE_PREVIEW_SCALE)
+        if preview_bubble_overlay_layout is not None:
+            overlay_output_path = build_overwrite_output_path(SCENE_PREVIEW_OUTPUTS_DIR, f"{cache_key}_overlay")
+            rasterize_bubble_overlay_asset(
+                preview_bubble_overlay_layout["asset"],
+                preview_bubble_overlay_layout["width"],
+                preview_bubble_overlay_layout["height"],
+            ).save(overlay_output_path)
+            preview_bubble_overlay_layout["image_url"] = f"/outputs/{overlay_output_path.relative_to(OUTPUTS_DIR)}"
+        preview_text_layout = build_scene_text_layout(layout_draw, text=text, position_scale=SCENE_PREVIEW_SCALE)
+        preview_text2_layout = build_scene_text_layout(layout_draw, text=text2, position_scale=SCENE_PREVIEW_SCALE)
+        return jsonify(
+            {
+                "ok": True,
+                "image_url": f"/outputs/{output_path.relative_to(OUTPUTS_DIR)}",
+                "layout": {
+                    "bubble_overlay": preview_bubble_overlay_layout,
+                    "message_band": preview_message_band_layout,
+                    "layer_order": normalize_scene_layer_order(layer_order),
+                    "layer_order_mode": normalize_scene_layer_order_mode(layer_order_mode),
+                    "text": preview_text_layout,
+                    "text2": preview_text2_layout,
+                },
+            }
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/composite_preview")
+def legacy_scene_preview_api():
+    return scene_preview_api()
+
+
+@app.get("/outputs/<path:filename>")
+def output_file(filename: str):
+    return send_from_directory(OUTPUTS_DIR, filename)
+
+
+@app.get("/data/src/<path:filename>")
+def data_src_file(filename: str):
+    try:
+        overlay_path = resolve_scene_overlay_output_path(filename)
+        if overlay_path is None:
+            raise FileNotFoundError(filename)
+        return send_from_directory(DATA_SRC_DIR, overlay_path.name)
+    except (FileNotFoundError, OSError, ValueError):
+        return jsonify({"ok": False, "error": "source file not found."}), 404
+
+
+@app.get("/assets/overlay_images/<path:filename>")
+def overlay_asset_image_file(filename: str):
+    try:
+        safe_name = Path(filename or "").name
+        if safe_name != filename or Path(safe_name).suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise ValueError("asset file is invalid.")
+        asset_path = (OVERLAY_IMAGE_LIBRARY_DIR / safe_name).resolve()
+        asset_path.relative_to(OVERLAY_IMAGE_LIBRARY_DIR.resolve())
+        if not asset_path.exists() or not asset_path.is_file():
+            raise FileNotFoundError(filename)
+        return send_from_directory(OVERLAY_IMAGE_LIBRARY_DIR, asset_path.name)
+    except (FileNotFoundError, OSError, ValueError):
+        return jsonify({"ok": False, "error": "overlay asset file not found."}), 404
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5014, debug=True)
