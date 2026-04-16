@@ -31,8 +31,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+プロジェクトルートで以下を実行してください:
+
 ```bash
-PYTHONPATH=src flask --app app run --debug --port 5014
+python src/app.py
 ```
 
 ブラウザで開く:
