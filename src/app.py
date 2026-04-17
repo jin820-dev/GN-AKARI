@@ -193,6 +193,22 @@ def move_to_trash(path: Path, kind: str) -> dict | None:
     return record
 
 
+def empty_trash() -> int:
+    deleted_count = len(load_trash_index())
+    TRASH_DIR.mkdir(parents=True, exist_ok=True)
+
+    for trash_path in TRASH_DIR.iterdir():
+        if trash_path == TRASH_INDEX_PATH:
+            continue
+        if trash_path.is_dir() and not trash_path.is_symlink():
+            shutil.rmtree(trash_path)
+        else:
+            trash_path.unlink()
+
+    save_trash_index([])
+    return deleted_count
+
+
 def list_psd_files() -> list[str]:
     if not DATA_PSD_DIR.exists():
         return []
@@ -985,6 +1001,7 @@ def render_settings_page(*, error_message: str | None = None):
     return render_template(
         "settings.html",
         error_message=error_message,
+        trash_item_count=len(load_trash_index()),
     )
 
 
@@ -1822,6 +1839,15 @@ def settings_delete_api():
         delete_settings_record(settings_name)
         return jsonify({"ok": True, "settings_name": sanitize_settings_name(settings_name)})
     except (FileNotFoundError, OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/trash/empty")
+def trash_empty_api():
+    try:
+        deleted_count = empty_trash()
+        return jsonify({"ok": True, "deleted_count": deleted_count, "trash_item_count": 0})
+    except OSError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 

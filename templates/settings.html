@@ -378,7 +378,11 @@
 
     <section class="settings-section">
       <div class="settings-section-title">データ削除について</div>
+      <p id="trash-item-count" class="subtle">現在のゴミ箱記録数: {{ trash_item_count }}件</p>
       <p class="subtle">削除したファイルは即時削除せず `data/trash/` に移動し、`data/trash/trash_index.json` に記録します。自動削除は行わないため、必要に応じて手動で復旧・整理してください。</p>
+      <div class="settings-actions">
+        <button type="button" id="empty-trash-button">ゴミ箱を空にする</button>
+      </div>
     </section>
   </section>
 
@@ -408,6 +412,8 @@
     const overlayAssetUploadButton = document.getElementById('overlay-asset-upload-button');
     const overlayAssetList = document.getElementById('overlay-asset-list');
     const overlayAssetListEmpty = document.getElementById('overlay-asset-list-empty');
+    const emptyTrashButton = document.getElementById('empty-trash-button');
+    const trashItemCount = document.getElementById('trash-item-count');
     let editingSettingsIndex = null;
     let editingSettingsName = '';
 
@@ -1147,6 +1153,28 @@
       }
     }
 
+    async function emptyTrash() {
+      if (!window.confirm('ゴミ箱内のファイルをすべて削除します。元に戻せません。続けますか？')) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/trash/empty', {
+          method: 'POST',
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || 'ゴミ箱を空にできませんでした。');
+        }
+        if (trashItemCount) {
+          trashItemCount.textContent = '現在のゴミ箱記録数: 0件';
+        }
+        showStatus(`ゴミ箱を空にしました（${data.deleted_count || 0}件）。`);
+      } catch (error) {
+        showStatus(error.message || 'ゴミ箱を空にできませんでした。', true);
+      }
+    }
+
     async function saveServerSettings() {
       const settingsName = getSettingsName();
       if (!settingsName) {
@@ -1246,6 +1274,9 @@
     });
     overlayAssetUploadButton?.addEventListener('click', () => {
       void uploadOverlayAssetFile();
+    });
+    emptyTrashButton?.addEventListener('click', () => {
+      void emptyTrash();
     });
 
     initializeLayerOrderModeSetting();
