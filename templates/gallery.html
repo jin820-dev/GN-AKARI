@@ -3,6 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6b26b">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
   <title>GN-AKARI Gallery</title>
   <style>
     :root {
@@ -258,7 +262,7 @@
 
     async function deleteGalleryImage(kind, filename) {
       if (!filename) return;
-      if (!window.confirm(`画像「${filename}」を削除します。よろしいですか？`)) {
+      if (!window.confirm(`画像「${filename}」を削除します。ファイルはゴミ箱に移動されます。よろしいですか？`)) {
         return;
       }
 
@@ -278,11 +282,12 @@
         const item = document.querySelector(`[data-gallery-item="${CSS.escape(kind + ':' + filename)}"]`);
         item?.remove();
         updateEmptyState(kind);
-        showStatus(`画像「${data.name}」を削除しました。`);
+        showStatus(`画像「${data.name}」を削除しました（ゴミ箱に移動されました）。`);
       } catch (error) {
         showStatus(error.message || '画像の削除に失敗しました。', true);
       }
     }
   </script>
+  <script src="{{ url_for('static', filename='js/pwa-register.js') }}" defer></script>
 </body>
 </html>

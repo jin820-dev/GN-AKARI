@@ -336,7 +336,7 @@
 
     <section class="settings-section">
       <div class="settings-section-title">PSDファイル管理</div>
-      <p class="subtle">PSD を WebUI から追加・確認・削除します。表示はファイル名のみで、内部パスは出しません。</p>
+      <p class="subtle">PSD を WebUI から追加・確認・削除します。表示はファイル名のみで、内部パスは出しません。アップロード上限は 50MB です。</p>
       <div class="psd-upload-row">
         <label class="settings-file">
           <span class="settings-file-label">PSDを選択</span>
@@ -350,7 +350,7 @@
 
     <section class="settings-section">
       <div class="settings-section-title">フォントファイル管理</div>
-      <p class="subtle">`.ttf` / `.otf` フォントを WebUI から登録します。表示はファイル名のみで、内部パスは出しません。</p>
+      <p class="subtle">`.ttf` / `.otf` フォントを WebUI から登録します。表示はファイル名のみで、内部パスは出しません。アップロード上限は 10MB です。</p>
       <div class="psd-upload-row">
         <label class="settings-file">
           <span class="settings-file-label">フォントを選択</span>
@@ -364,7 +364,7 @@
 
     <section class="settings-section">
       <div class="settings-section-title">画像素材管理</div>
-      <p class="subtle">画像素材は `data/assets/overlay_images/` に保存し、一覧は `data/assets/overlay_assets.json` で管理します。アップロード後は scene の「内蔵素材」から選べます。</p>
+      <p class="subtle">画像素材は `data/assets/overlay_images/` に保存し、一覧は `data/assets/overlay_assets.json` で管理します。アップロード上限は 20MB です。</p>
       <div class="psd-upload-row">
         <label class="settings-file">
           <span class="settings-file-label">画像素材を選択</span>
@@ -374,6 +374,11 @@
       </div>
       <div id="overlay-asset-list" class="psd-list"></div>
       <div id="overlay-asset-list-empty" class="empty is-hidden">アップロード済みの画像素材はまだありません。</div>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-title">データ削除について</div>
+      <p class="subtle">削除したファイルは即時削除せず `data/trash/` に移動し、`data/trash/trash_index.json` に記録します。自動削除は行わないため、必要に応じて手動で復旧・整理してください。</p>
     </section>
   </section>
 
@@ -707,7 +712,7 @@
     }
 
     async function deletePsdFile(name) {
-      if (!window.confirm(`PSD「${name}」を削除します。関連キャッシュも削除されます。よろしいですか？`)) {
+      if (!window.confirm(`PSD「${name}」を削除します。関連キャッシュもゴミ箱に移動されます。よろしいですか？`)) {
         return;
       }
 
@@ -723,7 +728,7 @@
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'PSDの削除に失敗しました。');
         }
-        showStatus(`PSD「${data.name}」と関連キャッシュを削除しました。`);
+        showStatus(`PSD「${data.name}」と関連キャッシュを削除しました（ゴミ箱に移動されました）。`);
         await loadPsdList();
       } catch (error) {
         showStatus(error.message || 'PSDの削除に失敗しました。', true);
@@ -817,7 +822,7 @@
     }
 
     async function deleteFontFile(name) {
-      if (!window.confirm(`フォント「${name}」を削除します。よろしいですか？`)) {
+      if (!window.confirm(`フォント「${name}」を削除します。ファイルはゴミ箱に移動されます。よろしいですか？`)) {
         return;
       }
 
@@ -833,7 +838,7 @@
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'フォントの削除に失敗しました。');
         }
-        showStatus(`フォント「${data.name}」を削除しました。`);
+        showStatus(`フォント「${data.name}」を削除しました（ゴミ箱に移動されました）。`);
         await loadFontList();
       } catch (error) {
         showStatus(error.message || 'フォントの削除に失敗しました。', true);
@@ -932,7 +937,7 @@
     }
 
     async function deleteOverlayAssetFile(id, label) {
-      if (!window.confirm(`画像素材「${label}」を削除します。scene で参照中の場合は表示されなくなります。よろしいですか？`)) {
+      if (!window.confirm(`画像素材「${label}」を削除します。ファイルはゴミ箱に移動され、scene で参照中の場合は表示されなくなります。よろしいですか？`)) {
         return;
       }
 
@@ -948,7 +953,7 @@
         if (!response.ok || !data.ok) {
           throw new Error(data.error || '画像素材の削除に失敗しました。');
         }
-        showStatus(`画像素材「${data.item?.label || data.item?.id || label}」を削除しました。`);
+        showStatus(`画像素材「${data.item?.label || data.item?.id || label}」を削除しました（ゴミ箱に移動されました）。`);
         await loadOverlayAssetList();
       } catch (error) {
         showStatus(error.message || '画像素材の削除に失敗しました。', true);
@@ -1112,7 +1117,7 @@
     }
 
     async function deleteServerSettings(settingsName) {
-      if (!window.confirm(`設定「${settingsName}」を削除します。よろしいですか？`)) {
+      if (!window.confirm(`設定「${settingsName}」を削除します。ファイルはゴミ箱に移動されます。よろしいですか？`)) {
         return;
       }
 
@@ -1135,7 +1140,7 @@
           editingSettingsIndex = null;
           editingSettingsName = '';
         }
-        showStatus(`設定「${data.settings_name}」を削除しました。`);
+        showStatus(`設定「${data.settings_name}」を削除しました（ゴミ箱に移動されました）。`);
         await loadServerSettingsList();
       } catch (error) {
         showStatus(error.message || '設定の削除に失敗しました。', true);

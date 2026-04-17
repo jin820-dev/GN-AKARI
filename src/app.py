@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from bubble_assets import (
     OVERLAY_ASSETS_METADATA_PATH,
@@ -38,6 +39,22 @@ SCENE_PREVIEW_OUTPUTS_DIR = OUTPUTS_DIR / "scene_preview"
 SCENE_BASE_OUTPUTS_DIR = OUTPUTS_DIR / "scene_base"
 COMPOSITE_PREVIEW_OUTPUTS_DIR = OUTPUTS_DIR / "composite_preview"
 SETTINGS_DATA_DIR = ROOT_DIR / "data" / "settings"
+TRASH_DIR = ROOT_DIR / "data" / "trash"
+TRASH_INDEX_PATH = TRASH_DIR / "trash_index.json"
+MB = 1024 * 1024
+MAX_IMAGE_UPLOAD_BYTES = 20 * MB
+MAX_PSD_UPLOAD_BYTES = 50 * MB
+MAX_FONT_UPLOAD_BYTES = 10 * MB
+MAX_REQUEST_BYTES = 80 * MB
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+ALLOWED_PSD_EXTENSIONS = {".psd"}
+ALLOWED_FONT_EXTENSIONS = {".ttf", ".otf"}
+TRASH_KIND_DIRS = {
+    "image": "images",
+    "psd": "psd",
+    "font": "fonts",
+    "other": "other",
+}
 SCENE_CANVAS_PRESETS = {
     "16:9": (1920, 1080),
     "4:3": (1600, 1200),
@@ -50,6 +67,130 @@ DEFAULT_SCENE_LAYER_ORDER = ["base_image", "message_band", "character1", "charac
 DEFAULT_SCENE_LAYER_ORDER_MODE = "aviutl"
 
 app = Flask(__name__, template_folder=str(ROOT_DIR / "templates"))
+app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def request_entity_too_large(error):
+    return jsonify({"ok": False, "error": "upload request is too large. Maximum request size is 80MB."}), 413
+
+
+def format_bytes(size: int) -> str:
+    if size % MB == 0:
+        return f"{size // MB}MB"
+    return f"{size} bytes"
+
+
+def get_upload_size(file_storage) -> int:
+    stream = getattr(file_storage, "stream", None)
+    if stream is not None:
+        try:
+            current_position = stream.tell()
+            stream.seek(0, 2)
+            size = stream.tell()
+            stream.seek(current_position)
+            return size
+        except (AttributeError, OSError):
+            pass
+
+    content_length = getattr(file_storage, "content_length", None)
+    if content_length:
+        return int(content_length)
+    return 0
+
+
+def validate_upload_extension(filename: str, allowed_extensions: set[str], label: str) -> None:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix not in allowed_extensions:
+        allowed = ", ".join(sorted(allowed_extensions))
+        raise ValueError(f"{label} must use one of these extensions: {allowed}.")
+
+
+def validate_upload_size(file_storage, max_bytes: int, label: str) -> None:
+    size = get_upload_size(file_storage)
+    if size > max_bytes:
+        raise ValueError(f"{label} is too large. Maximum size is {format_bytes(max_bytes)}.")
+
+
+def validate_upload_file(file_storage, allowed_extensions: set[str], max_bytes: int, label: str) -> None:
+    if file_storage is None or not file_storage.filename:
+        raise ValueError("file is required.")
+    validate_upload_extension(file_storage.filename, allowed_extensions, label)
+    validate_upload_size(file_storage, max_bytes, label)
+
+
+def read_validated_upload(file_storage, allowed_extensions: set[str], max_bytes: int, label: str) -> bytes:
+    validate_upload_file(file_storage, allowed_extensions, max_bytes, label)
+    data = file_storage.read()
+    if len(data) > max_bytes:
+        raise ValueError(f"{label} is too large. Maximum size is {format_bytes(max_bytes)}.")
+    return data
+
+
+def read_validated_image_upload(file_storage, label: str) -> bytes:
+    data = read_validated_upload(file_storage, ALLOWED_IMAGE_EXTENSIONS, MAX_IMAGE_UPLOAD_BYTES, label)
+    try:
+        with Image.open(BytesIO(data)) as image:
+            image.verify()
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{label} must be a valid image file.") from exc
+    return data
+
+
+def load_trash_index() -> list[dict]:
+    if not TRASH_INDEX_PATH.exists():
+        return []
+    try:
+        payload = json.loads(TRASH_INDEX_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return payload
+
+
+def save_trash_index(records: list[dict]) -> None:
+    TRASH_DIR.mkdir(parents=True, exist_ok=True)
+    TRASH_INDEX_PATH.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def format_trash_record_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT_DIR))
+    except ValueError:
+        return str(path)
+
+
+def move_to_trash(path: Path, kind: str) -> dict | None:
+    if not path.exists():
+        return None
+
+    trash_kind = kind if kind in TRASH_KIND_DIRS else "other"
+    deleted_at = datetime.now().isoformat(timespec="seconds")
+    trash_id = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}"
+    trash_dir = TRASH_DIR / TRASH_KIND_DIRS[trash_kind]
+    trash_dir.mkdir(parents=True, exist_ok=True)
+
+    source_name = path.name
+    if path.is_dir():
+        trash_name = f"{path.name}_{trash_id}"
+    else:
+        trash_name = f"{path.stem}_{trash_id}{path.suffix}"
+    trash_path = trash_dir / trash_name
+    shutil.move(str(path), str(trash_path))
+
+    record = {
+        "id": trash_id,
+        "kind": trash_kind,
+        "original_path": format_trash_record_path(path),
+        "trash_path": format_trash_record_path(trash_path),
+        "original_name": source_name,
+        "deleted_at": deleted_at,
+    }
+    records = load_trash_index()
+    records.append(record)
+    save_trash_index(records)
+    return record
 
 
 def list_psd_files() -> list[str]:
@@ -66,7 +207,7 @@ def sanitize_psd_filename(filename: str) -> str:
     normalized = Path(filename or "").name.strip()
     if not normalized:
         raise ValueError("filename is required.")
-    if Path(normalized).suffix.lower() != ".psd":
+    if Path(normalized).suffix.lower() not in ALLOWED_PSD_EXTENSIONS:
         raise ValueError("only .psd files are supported.")
 
     stem = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", Path(normalized).stem).strip(" ._")
@@ -85,7 +226,7 @@ def sanitize_font_filename(filename: str) -> str:
         raise ValueError("filename is required.")
 
     suffix = Path(normalized).suffix.lower()
-    if suffix not in {".ttf", ".otf"}:
+    if suffix not in ALLOWED_FONT_EXTENSIONS:
         raise ValueError("only .ttf and .otf files are supported.")
 
     stem = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", Path(normalized).stem).strip(" ._")
@@ -106,7 +247,7 @@ def resolve_font_file_path(filename: str) -> Path:
     safe_name = Path(raw_name).name
     if raw_name != safe_name:
         raise ValueError("filename is invalid.")
-    if Path(safe_name).suffix.lower() not in {".ttf", ".otf"}:
+    if Path(safe_name).suffix.lower() not in ALLOWED_FONT_EXTENSIONS:
         raise ValueError("only .ttf and .otf files are supported.")
 
     candidate = (DATA_FONT_DIR / safe_name).resolve()
@@ -120,7 +261,7 @@ def list_font_file_items() -> list[dict]:
 
     items = []
     for path in DATA_FONT_DIR.iterdir():
-        if not path.is_file() or path.suffix.lower() not in {".ttf", ".otf"}:
+        if not path.is_file() or path.suffix.lower() not in ALLOWED_FONT_EXTENSIONS:
             continue
         stat = path.stat()
         items.append(
@@ -138,7 +279,7 @@ def list_font_file_items() -> list[dict]:
 def delete_font_file(filename: str) -> str:
     font_path = resolve_font_file_path(filename)
     if font_path.exists() and font_path.is_file():
-        font_path.unlink()
+        move_to_trash(font_path, "font")
     return font_path.name
 
 
@@ -303,12 +444,14 @@ def collect_psd_cache_keys(psd_name: str) -> list[str]:
 
 
 def remove_cache_artifacts(cache_key: str) -> None:
-    shutil.rmtree(CACHE_DIR / cache_key, ignore_errors=True)
+    cache_dir = CACHE_DIR / cache_key
+    if cache_dir.exists():
+        move_to_trash(cache_dir, "other")
     for output_dir in (PREVIEW_OUTPUTS_DIR, COMPOSITE_PREVIEW_OUTPUTS_DIR, SCENE_PREVIEW_OUTPUTS_DIR):
         for suffix in (".png", ".json"):
             artifact_path = output_dir / f"{cache_key}{suffix}"
             if artifact_path.exists():
-                artifact_path.unlink()
+                move_to_trash(artifact_path, "other")
 
 
 def delete_psd_with_cache(psd_name: str) -> dict:
@@ -318,7 +461,7 @@ def delete_psd_with_cache(psd_name: str) -> dict:
         raise FileNotFoundError(f"PSD file not found: {safe_name}")
 
     cache_keys = collect_psd_cache_keys(safe_name)
-    psd_path.unlink()
+    move_to_trash(psd_path, "psd")
     for cache_key in cache_keys:
         remove_cache_artifacts(cache_key)
 
@@ -400,7 +543,7 @@ def delete_gallery_output(filename: str, kind: str = "portrait") -> str:
         raise ValueError("name is invalid.") from exc
 
     if portrait_path.exists() and portrait_path.is_file():
-        portrait_path.unlink()
+        move_to_trash(portrait_path, "image")
     return safe_name
 
 
@@ -429,7 +572,7 @@ def resolve_scene_overlay_output_path(filename: str) -> Path | None:
     except ValueError:
         return None
 
-    if candidate.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"} or not candidate.exists() or not candidate.is_file():
+    if candidate.suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS or not candidate.exists() or not candidate.is_file():
         return None
     return candidate
 
@@ -440,7 +583,7 @@ def sanitize_scene_overlay_filename(filename: str) -> str:
         raise ValueError("filename is required.")
 
     suffix = Path(normalized).suffix.lower()
-    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+    if suffix not in ALLOWED_IMAGE_EXTENSIONS:
         raise ValueError("overlay image must be png, jpg, jpeg, or webp.")
 
     stem = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", Path(normalized).stem).strip(" ._")
@@ -466,24 +609,26 @@ def build_scene_overlay_storage_path(filename: str) -> Path:
 
 
 def save_scene_base_image(file_storage) -> tuple[str, str, str]:
+    data = read_validated_image_upload(file_storage, "base image")
     SCENE_BASE_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     output_name = f"{datetime.now().strftime('%y%m%d_%H%M%S')}_{secrets.token_hex(4)}.png"
     output_path = SCENE_BASE_OUTPUTS_DIR / output_name
     display_name = Path(file_storage.filename or output_name).name
 
-    image = Image.open(BytesIO(file_storage.read())).convert("RGBA")
+    image = Image.open(BytesIO(data)).convert("RGBA")
     image.save(output_path)
     return output_name, f"/outputs/{output_path.relative_to(OUTPUTS_DIR)}", display_name
 
 
 def save_scene_overlay_image(file_storage) -> tuple[str, str, str]:
+    data = read_validated_image_upload(file_storage, "overlay image")
     DATA_SRC_DIR.mkdir(parents=True, exist_ok=True)
     output_path = build_scene_overlay_storage_path(file_storage.filename or "")
     output_name = output_path.name
     suffix = output_path.suffix.lower()
     display_name = Path(file_storage.filename or output_name).name
 
-    image = Image.open(BytesIO(file_storage.read())).convert("RGBA")
+    image = Image.open(BytesIO(data)).convert("RGBA")
     if suffix in {".jpg", ".jpeg"}:
         rgb_image = Image.new("RGB", image.size, (255, 255, 255))
         rgb_image.paste(image, mask=image.getchannel("A"))
@@ -539,10 +684,11 @@ def save_overlay_asset_image(file_storage) -> dict:
     if file_storage is None or not file_storage.filename:
         raise ValueError("file is required.")
 
+    data = read_validated_image_upload(file_storage, "overlay asset image")
     OVERLAY_IMAGE_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
     output_path = build_unique_overlay_asset_storage_path(file_storage.filename)
     suffix = output_path.suffix.lower()
-    image = Image.open(BytesIO(file_storage.read())).convert("RGBA")
+    image = Image.open(BytesIO(data)).convert("RGBA")
     if suffix in {".jpg", ".jpeg"}:
         rgb_image = Image.new("RGB", image.size, (255, 255, 255))
         rgb_image.paste(image, mask=image.getchannel("A"))
@@ -589,7 +735,7 @@ def delete_overlay_asset_image(asset_id: str) -> dict:
         asset_path = (OVERLAY_IMAGE_LIBRARY_DIR / filename).resolve()
         asset_path.relative_to(OVERLAY_IMAGE_LIBRARY_DIR.resolve())
         if asset_path.exists() and asset_path.is_file():
-            asset_path.unlink()
+            move_to_trash(asset_path, "image")
 
     save_registered_overlay_asset_records(kept_records)
     return target_record
@@ -665,7 +811,7 @@ def rename_settings_record(settings_name: str, new_settings_name: str) -> dict:
         raise ValueError(f"settings already exists: {target_name}")
 
     current_record["settings_name"] = target_name
-    current_path.unlink()
+    current_path.replace(target_path)
     target_path.write_text(json.dumps(current_record, ensure_ascii=False, indent=2), encoding="utf-8")
     return current_record
 
@@ -674,7 +820,7 @@ def delete_settings_record(settings_name: str) -> None:
     settings_path = build_settings_file_path(settings_name)
     if not settings_path.exists():
         raise FileNotFoundError(f"settings not found: {settings_name}")
-    settings_path.unlink()
+    move_to_trash(settings_path, "other")
 
 
 def list_settings_records() -> list[dict]:
@@ -1260,7 +1406,8 @@ def load_scene_inputs() -> tuple[Image.Image, list[dict], dict, dict, dict, dict
         raise ValueError("base_fit_mode is invalid.")
 
     if base_image is not None and base_image.filename:
-        base = Image.open(BytesIO(base_image.read())).convert("RGBA")
+        base_image_data = read_validated_image_upload(base_image, "base image")
+        base = Image.open(BytesIO(base_image_data)).convert("RGBA")
     else:
         base_image_path = resolve_scene_base_output_path(base_image_name)
         if base_image_path is None:
@@ -1431,6 +1578,11 @@ def index():
     return render_portrait_page()
 
 
+@app.get("/service-worker.js")
+def service_worker():
+    return send_from_directory(app.static_folder, "service-worker.js", max_age=0)
+
+
 @app.get("/scene")
 def scene_page():
     selected_portrait_filename = (request.args.get("portrait") or "").strip()
@@ -1461,6 +1613,7 @@ def psd_upload_api():
         if uploaded_file is None or not uploaded_file.filename:
             raise ValueError("file is required.")
 
+        validate_upload_file(uploaded_file, ALLOWED_PSD_EXTENSIONS, MAX_PSD_UPLOAD_BYTES, "PSD")
         output_name = sanitize_psd_filename(uploaded_file.filename)
         output_path = build_psd_storage_path(output_name)
         if output_path.exists():
@@ -1480,6 +1633,7 @@ def font_upload_api():
         if uploaded_file is None or not uploaded_file.filename:
             raise ValueError("file is required.")
 
+        validate_upload_file(uploaded_file, ALLOWED_FONT_EXTENSIONS, MAX_FONT_UPLOAD_BYTES, "font")
         output_name = sanitize_font_filename(uploaded_file.filename)
         output_path = build_font_storage_path(output_name)
         if output_path.exists():

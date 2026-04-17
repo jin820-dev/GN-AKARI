@@ -88,6 +88,18 @@ GN-AKARI は first release 向けの最小 PWA 対応として、manifest と se
 - outputs/
 - cache/
 
+### アップロードと削除
+
+アップロード上限は以下です。
+
+- PSD: 50MB
+- 画像: 20MB
+- フォント: 10MB
+
+削除したファイルは即時削除せず、`data/trash/` に移動します。削除記録は `data/trash/trash_index.json` に残ります。
+
+trash は自動削除しません。必要に応じて手動で復旧・整理してください。
+
 ---
 
 ## 注意事項

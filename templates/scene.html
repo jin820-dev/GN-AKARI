@@ -615,6 +615,7 @@
           <div class="field">
             <label for="base-image">ベース画像</label>
             <input id="base-image" name="base_image" type="file" accept="image/png,image/jpeg,image/webp">
+            <div class="field-note">画像アップロード上限は 20MB です。</div>
             <div id="base-image-source" class="base-image-source"></div>
           </div>
 
@@ -956,7 +957,7 @@
               <option value="{{ bubble_id }}">{{ bubble.label }}</option>
               {% endfor %}
             </select>
-            <div class="field-note">素材の追加・削除は設定ページで行います。</div>
+            <div class="field-note">素材の追加・削除は設定ページで行います。画像アップロード上限は 20MB です。</div>
           </div>
           </div>
           <div class="row row--2">
