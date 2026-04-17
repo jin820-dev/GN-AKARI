@@ -47,6 +47,16 @@ http://127.0.0.1:5014/
 
 ---
 
+## PWA について
+
+GN-AKARI は first release 向けの最小 PWA 対応として、manifest と service worker を含みます。
+
+- `localhost` / `127.0.0.1` ではブラウザからインストールできます
+- LAN 公開など `localhost` 以外で利用する場合、ブラウザの service worker / PWA 要件により HTTPS が必要になる場合があります
+- オフライン時は最低限のアプリシェルを表示するため、動的 API レスポンスや生成画像は積極的にはキャッシュしません
+
+---
+
 ## 画面構成
 
 - 立ち絵合成  
