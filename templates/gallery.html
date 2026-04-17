@@ -129,6 +129,39 @@
       gap: 8px;
       flex-wrap: wrap;
     }
+    .gallery-action-button {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      justify-content: center;
+      gap: 0;
+      border: 1px solid var(--akari-border);
+      background: #fffdfa;
+      color: var(--text-main);
+      box-shadow: 0 3px 10px rgba(230, 145, 56, 0.12);
+    }
+    .gallery-action-button:hover {
+      background: var(--akari-soft);
+      border-color: var(--akari-accent);
+    }
+    .gallery-action-button--delete {
+      color: #8f2b1d;
+      border-color: #e8b2a8;
+    }
+    .gallery-action-button--delete:hover {
+      background: #fff0ed;
+      border-color: #c84a36;
+    }
+    .gallery-action-icon {
+      width: 18px;
+      height: 18px;
+      display: block;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
     .filename {
       font-weight: 700;
       word-break: break-all;
@@ -191,14 +224,33 @@
         <div class="gallery-actions">
           <button
             type="button"
+            class="gallery-action-button"
             data-filename="{{ item.filename }}"
+            title="使う"
+            aria-label="使う"
             onclick="usePortrait(this.dataset.filename)"
-          >使う</button>
+          >
+            <svg class="gallery-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 12h14"></path>
+              <path d="m13 6 6 6-6 6"></path>
+            </svg>
+          </button>
           <button
             type="button"
+            class="gallery-action-button gallery-action-button--delete"
             data-filename="{{ item.filename }}"
+            title="削除"
+            aria-label="削除"
             onclick="deleteGalleryImage('portrait', this.dataset.filename)"
-          >削除</button>
+          >
+            <svg class="gallery-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16"></path>
+              <path d="M10 11v6"></path>
+              <path d="M14 11v6"></path>
+              <path d="M6 7l1 14h10l1-14"></path>
+              <path d="M9 7V4h6v3"></path>
+            </svg>
+          </button>
         </div>
       </div>
       {% endfor %}
@@ -223,9 +275,20 @@
         <div class="gallery-actions">
           <button
             type="button"
+            class="gallery-action-button gallery-action-button--delete"
             data-filename="{{ item.filename }}"
+            title="削除"
+            aria-label="削除"
             onclick="deleteGalleryImage('scene', this.dataset.filename)"
-          >削除</button>
+          >
+            <svg class="gallery-action-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16"></path>
+              <path d="M10 11v6"></path>
+              <path d="M14 11v6"></path>
+              <path d="M6 7l1 14h10l1-14"></path>
+              <path d="M9 7V4h6v3"></path>
+            </svg>
+          </button>
         </div>
       </div>
       {% endfor %}
