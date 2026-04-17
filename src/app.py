@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import json
 import hashlib
 import re
@@ -2169,4 +2170,7 @@ def overlay_asset_image_file(filename: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5014, debug=True)
+    host = os.getenv("AKARI_HOST", "0.0.0.0")
+    debug = os.getenv("AKARI_DEBUG", "0") == "1"
+
+    app.run(host=host, port=5014, debug=debug)
