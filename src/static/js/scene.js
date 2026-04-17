@@ -2,6 +2,8 @@
     const canvasPresets = sceneBootstrap.canvasPresets || {};
     const bubbleOverlayAssets = sceneBootstrap.bubbleOverlayAssets || {};
     const previewScaleFactor = 0.5;
+
+    // Scene state: initialPortraitFilename is a one-time URL seed; lastSelectedPortraitFilename is kept separately from the active source.
     let initialPortraitFilename = sceneBootstrap.initialPortraitFilename || '';
     let lastSelectedPortraitFilename = '';
     const sceneStorageKey = 'gn_akari_scene_state';
@@ -426,6 +428,7 @@
       }
     }
 
+    // Scene state helpers: normalize, serialize, restore, and consume the one-time portrait seed.
     function normalizeCharacter1SourceState(preferredSource = '') {
       const portraitFilename = portraitFilenameInput?.value || '';
       const cacheKey = cacheKeySelect?.value || '';
@@ -519,106 +522,13 @@
       }
     }
 
-    function loadPortraitLayoutState() {
-      try {
-        const raw = localStorage.getItem(portraitLayoutStorageKey);
-        if (!raw) return {};
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === 'object' ? parsed : {};
-      } catch {
-        return {};
+    function clearInitialPortraitSeed() {
+      const sceneUrl = new URL(window.location.href);
+      if (sceneUrl.searchParams.has('portrait')) {
+        sceneUrl.searchParams.delete('portrait');
+        window.history.replaceState({}, '', `${sceneUrl.pathname}${sceneUrl.search}${sceneUrl.hash}`);
       }
-    }
-
-    function loadSceneUiState() {
-      try {
-        const raw = localStorage.getItem(sceneUiStateStorageKey);
-        if (!raw) return { ...defaultSectionOpenState };
-        const parsed = JSON.parse(raw);
-        return {
-          ...defaultSectionOpenState,
-          ...(parsed && typeof parsed === 'object' ? parsed : {}),
-        };
-      } catch {
-        return { ...defaultSectionOpenState };
-      }
-    }
-
-    function saveSceneUiState(nextState) {
-      try {
-        localStorage.setItem(sceneUiStateStorageKey, JSON.stringify(nextState));
-      } catch {
-        // Ignore localStorage errors and keep current behavior.
-      }
-    }
-
-    function applySectionOpenState(sectionKey, isOpen) {
-      const block = document.querySelector(`.settings-block[data-section-key="${sectionKey}"]`);
-      const toggle = document.querySelector(`[data-settings-toggle="${sectionKey}"]`);
-      if (!block || !toggle) return;
-      block.classList.toggle('is-collapsed', !isOpen);
-      toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-    }
-
-    function initializeSectionToggles() {
-      const uiState = loadSceneUiState();
-      Object.entries(defaultSectionOpenState).forEach(([sectionKey, defaultOpen]) => {
-        const isOpen = uiState[sectionKey] ?? defaultOpen;
-        applySectionOpenState(sectionKey, isOpen);
-      });
-
-      document.querySelectorAll('[data-settings-toggle]').forEach((toggle) => {
-        toggle.addEventListener('click', () => {
-          const sectionKey = toggle.dataset.settingsToggle;
-          if (!sectionKey) return;
-          const nextState = loadSceneUiState();
-          const currentOpen = nextState[sectionKey] ?? defaultSectionOpenState[sectionKey] ?? true;
-          nextState[sectionKey] = !currentOpen;
-          saveSceneUiState(nextState);
-          applySectionOpenState(sectionKey, !currentOpen);
-        });
-      });
-    }
-
-    function savePortraitLayoutState() {
-      const portraitFilename = portraitFilenameInput?.value || '';
-      if (!portraitFilename) return;
-
-      const layouts = loadPortraitLayoutState();
-      layouts[portraitFilename] = {
-        x: positionXInput?.value || '0',
-        y: positionYInput?.value || '0',
-        scale: scaleInput?.value || '100',
-      };
-      try {
-        localStorage.setItem(portraitLayoutStorageKey, JSON.stringify(layouts));
-      } catch {
-        // Ignore localStorage errors and keep current behavior.
-      }
-    }
-
-    function applyPortraitLayoutState() {
-      const portraitFilename = portraitFilenameInput?.value || '';
-      if (!portraitFilename) {
-        activePortraitLayoutKey = '';
-        return;
-      }
-      if (activePortraitLayoutKey === portraitFilename) {
-        return;
-      }
-
-      const layouts = loadPortraitLayoutState();
-      const layout = layouts[portraitFilename];
-      if (positionXInput) {
-        positionXInput.value = layout?.x || '0';
-      }
-      if (positionYInput) {
-        positionYInput.value = layout?.y || '0';
-      }
-      if (scaleInput) {
-        scaleInput.value = layout?.scale || '100';
-      }
-      activePortraitLayoutKey = portraitFilename;
+      initialPortraitFilename = '';
     }
 
     function commitInitialPortraitSelection() {
@@ -638,15 +548,6 @@
       updateCharacterPreviewSelectLabels();
       saveSceneState();
       clearInitialPortraitSeed();
-    }
-
-    function clearInitialPortraitSeed() {
-      const sceneUrl = new URL(window.location.href);
-      if (sceneUrl.searchParams.has('portrait')) {
-        sceneUrl.searchParams.delete('portrait');
-        window.history.replaceState({}, '', `${sceneUrl.pathname}${sceneUrl.search}${sceneUrl.hash}`);
-      }
-      initialPortraitFilename = '';
     }
 
     function applyStoredSceneState() {
@@ -797,6 +698,108 @@
       if (initialPortraitFilename) {
         commitInitialPortraitSelection();
       }
+    }
+
+    function loadPortraitLayoutState() {
+      try {
+        const raw = localStorage.getItem(portraitLayoutStorageKey);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function loadSceneUiState() {
+      try {
+        const raw = localStorage.getItem(sceneUiStateStorageKey);
+        if (!raw) return { ...defaultSectionOpenState };
+        const parsed = JSON.parse(raw);
+        return {
+          ...defaultSectionOpenState,
+          ...(parsed && typeof parsed === 'object' ? parsed : {}),
+        };
+      } catch {
+        return { ...defaultSectionOpenState };
+      }
+    }
+
+    function saveSceneUiState(nextState) {
+      try {
+        localStorage.setItem(sceneUiStateStorageKey, JSON.stringify(nextState));
+      } catch {
+        // Ignore localStorage errors and keep current behavior.
+      }
+    }
+
+    function applySectionOpenState(sectionKey, isOpen) {
+      const block = document.querySelector(`.settings-block[data-section-key="${sectionKey}"]`);
+      const toggle = document.querySelector(`[data-settings-toggle="${sectionKey}"]`);
+      if (!block || !toggle) return;
+      block.classList.toggle('is-collapsed', !isOpen);
+      toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    }
+
+    function initializeSectionToggles() {
+      const uiState = loadSceneUiState();
+      Object.entries(defaultSectionOpenState).forEach(([sectionKey, defaultOpen]) => {
+        const isOpen = uiState[sectionKey] ?? defaultOpen;
+        applySectionOpenState(sectionKey, isOpen);
+      });
+
+      document.querySelectorAll('[data-settings-toggle]').forEach((toggle) => {
+        toggle.addEventListener('click', () => {
+          const sectionKey = toggle.dataset.settingsToggle;
+          if (!sectionKey) return;
+          const nextState = loadSceneUiState();
+          const currentOpen = nextState[sectionKey] ?? defaultSectionOpenState[sectionKey] ?? true;
+          nextState[sectionKey] = !currentOpen;
+          saveSceneUiState(nextState);
+          applySectionOpenState(sectionKey, !currentOpen);
+        });
+      });
+    }
+
+    function savePortraitLayoutState() {
+      const portraitFilename = portraitFilenameInput?.value || '';
+      if (!portraitFilename) return;
+
+      const layouts = loadPortraitLayoutState();
+      layouts[portraitFilename] = {
+        x: positionXInput?.value || '0',
+        y: positionYInput?.value || '0',
+        scale: scaleInput?.value || '100',
+      };
+      try {
+        localStorage.setItem(portraitLayoutStorageKey, JSON.stringify(layouts));
+      } catch {
+        // Ignore localStorage errors and keep current behavior.
+      }
+    }
+
+    function applyPortraitLayoutState() {
+      const portraitFilename = portraitFilenameInput?.value || '';
+      if (!portraitFilename) {
+        activePortraitLayoutKey = '';
+        return;
+      }
+      if (activePortraitLayoutKey === portraitFilename) {
+        return;
+      }
+
+      const layouts = loadPortraitLayoutState();
+      const layout = layouts[portraitFilename];
+      if (positionXInput) {
+        positionXInput.value = layout?.x || '0';
+      }
+      if (positionYInput) {
+        positionYInput.value = layout?.y || '0';
+      }
+      if (scaleInput) {
+        scaleInput.value = layout?.scale || '100';
+      }
+      activePortraitLayoutKey = portraitFilename;
     }
 
     function getServerBaseImageUrl() {
