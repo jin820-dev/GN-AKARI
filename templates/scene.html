@@ -1037,7 +1037,8 @@
     const canvasPresets = {{ canvas_presets | tojson }};
     const bubbleOverlayAssets = {{ bubble_overlay_assets | tojson }};
     const previewScaleFactor = 0.5;
-    const initialPortraitFilename = {{ (selected_portrait_filename or '') | tojson }};
+    let initialPortraitFilename = {{ (selected_portrait_filename or '') | tojson }};
+    let lastSelectedPortraitFilename = '';
     const initialPortraitUrl = {{ (selected_portrait_url or '') | tojson }};
     const sceneStorageKey = 'gn_akari_scene_state';
     const portraitLayoutStorageKey = 'gn_akari_scene_portrait_layouts';
@@ -1139,7 +1140,6 @@
     let baseObjectUrl = null;
     let restoredBaseImageUrl = '';
     let indexedDbBaseImageBlob = null;
-    let useInitialPortrait = Boolean(initialPortraitUrl);
     let activePortraitLayoutKey = '';
     let sceneBaseImageDbPromise = null;
     let latestPreviewLayout = null;
@@ -1462,11 +1462,43 @@
       }
     }
 
+    function normalizeCharacter1SourceState(preferredSource = '') {
+      const portraitFilename = portraitFilenameInput?.value || '';
+      const cacheKey = cacheKeySelect?.value || '';
+
+      if (preferredSource === 'preview' && cacheKey) {
+        if (portraitFilenameInput) {
+          portraitFilenameInput.value = '';
+        }
+        return 'preview';
+      }
+
+      if (portraitFilename) {
+        lastSelectedPortraitFilename = portraitFilename;
+        if (cacheKeySelect) {
+          cacheKeySelect.value = '';
+          cacheKeySelect.dataset.portraitFilename = lastSelectedPortraitFilename;
+        }
+        return 'portrait';
+      }
+
+      if (cacheKey) {
+        if (portraitFilenameInput) {
+          portraitFilenameInput.value = '';
+        }
+        return 'preview';
+      }
+
+      return '';
+    }
+
     function buildSceneStatePayload() {
+      normalizeCharacter1SourceState();
       return {
         character1_enabled: character1EnabledInput?.checked ? '1' : '0',
         cache_key: cacheKeySelect?.value || '',
         portrait_filename: portraitFilenameInput?.value || '',
+        last_selected_portrait_filename: lastSelectedPortraitFilename || '',
         scale: scaleInput?.value || '100',
         x: positionXInput?.value || '0',
         y: positionYInput?.value || '0',
@@ -1625,23 +1657,57 @@
       activePortraitLayoutKey = portraitFilename;
     }
 
+    function commitInitialPortraitSelection() {
+      if (!initialPortraitFilename) return;
+      lastSelectedPortraitFilename = initialPortraitFilename;
+      if (portraitFilenameInput) {
+        portraitFilenameInput.value = initialPortraitFilename;
+      }
+      if (cacheKeySelect) {
+        cacheKeySelect.value = '';
+      }
+      if (character1EnabledInput) {
+        character1EnabledInput.checked = true;
+        updateVisibilityIcon(character1EnabledInput);
+      }
+      normalizeCharacter1SourceState('portrait');
+      updateCharacterPreviewSelectLabels();
+      saveSceneState();
+      clearInitialPortraitSeed();
+    }
+
+    function clearInitialPortraitSeed() {
+      const sceneUrl = new URL(window.location.href);
+      if (sceneUrl.searchParams.has('portrait')) {
+        sceneUrl.searchParams.delete('portrait');
+        window.history.replaceState({}, '', `${sceneUrl.pathname}${sceneUrl.search}${sceneUrl.hash}`);
+      }
+      initialPortraitFilename = '';
+    }
+
     function applyStoredSceneState() {
       const stored = loadSceneState();
-      if (!stored) return;
+      if (!stored) {
+        commitInitialPortraitSelection();
+        return;
+      }
 
-      if (!initialPortraitFilename && stored.portrait_filename) {
-        useInitialPortrait = true;
+      const storedPortraitFilename = stored.portrait_filename || '';
+      const storedCacheKey = stored.cache_key || '';
+      lastSelectedPortraitFilename = stored.last_selected_portrait_filename || storedPortraitFilename || '';
+      if (storedPortraitFilename) {
         if (portraitFilenameInput) {
-          portraitFilenameInput.value = stored.portrait_filename;
+          portraitFilenameInput.value = storedPortraitFilename;
         }
       }
       if (character1EnabledInput) {
         character1EnabledInput.checked = stored.character1_enabled !== '0';
         updateVisibilityIcon(character1EnabledInput);
       }
-      if (cacheKeySelect && stored.cache_key) {
-        cacheKeySelect.value = stored.cache_key;
+      if (cacheKeySelect) {
+        cacheKeySelect.value = storedPortraitFilename ? '' : storedCacheKey;
       }
+      normalizeCharacter1SourceState(storedPortraitFilename ? 'portrait' : 'preview');
       if (scaleInput && stored.scale) {
         scaleInput.value = stored.scale;
       }
@@ -1764,6 +1830,9 @@
       }
       lastBubbleOverlayAssetValue = bubbleOverlayAssetInput?.value || '';
       updateOverlaySourcePanels();
+      if (initialPortraitFilename) {
+        commitInitialPortraitSelection();
+      }
     }
 
     function getServerBaseImageUrl() {
@@ -1784,14 +1853,6 @@
       if (!isCharacterEnabled(slot)) {
         return '';
       }
-      if (slot.slot === 1 && useInitialPortrait) {
-        if (initialPortraitUrl) {
-          return initialPortraitUrl;
-        }
-        if (slot.portraitFilenameInput?.value) {
-          return `/outputs/portrait/${encodeURIComponent(slot.portraitFilenameInput.value)}`;
-        }
-      }
       if (slot.portraitFilenameInput?.value) {
         return `/outputs/portrait/${encodeURIComponent(slot.portraitFilenameInput.value)}`;
       }
@@ -1808,17 +1869,52 @@
       sceneStatus.classList.toggle('is-loading', state === 'loading');
     }
 
+    function updateCharacterPreviewSelectLabels() {
+      characterSlots.forEach((slot) => {
+        const placeholderOption = slot.cacheKeyInput?.querySelector('option[value=""]');
+        if (!placeholderOption) return;
+        if (!placeholderOption.dataset.defaultLabel) {
+          placeholderOption.dataset.defaultLabel = placeholderOption.textContent || '';
+        }
+
+        const currentPortraitFilename = slot.portraitFilenameInput?.value || '';
+        if (slot.slot === 1 && lastSelectedPortraitFilename) {
+          slot.cacheKeyInput.dataset.portraitFilename = lastSelectedPortraitFilename;
+        }
+        if (currentPortraitFilename) {
+          slot.cacheKeyInput.dataset.portraitFilename = currentPortraitFilename;
+        }
+        const portraitFilename = slot.slot === 1
+          ? (lastSelectedPortraitFilename || currentPortraitFilename)
+          : (currentPortraitFilename || slot.cacheKeyInput.dataset.portraitFilename || '');
+        placeholderOption.textContent = portraitFilename
+          ? portraitFilename
+          : placeholderOption.dataset.defaultLabel;
+      });
+    }
+
+    function getCharacterSourceLabel(slot) {
+      const portraitFilename = slot.portraitFilenameInput?.value || '';
+      const cacheKey = slot.cacheKeyInput?.value || '';
+
+      if (portraitFilename) {
+        return `キャラ${slot.slot}: ${portraitFilename}`;
+      }
+      if (cacheKey) {
+        return `キャラ${slot.slot}: preview (${cacheKey})`;
+      }
+      return '';
+    }
+
     function updateCurrentSourceLabel() {
       if (!currentSource) return;
+      updateCharacterPreviewSelectLabels();
       const labels = [];
       characterSlots.forEach((slot) => {
         if (!isCharacterEnabled(slot)) return;
-        if (slot.portraitFilenameInput?.value) {
-          labels.push(`キャラ${slot.slot}: ${slot.portraitFilenameInput.value}`);
-          return;
-        }
-        if (slot.cacheKeyInput?.value) {
-          labels.push(`キャラ${slot.slot}: preview (${slot.cacheKeyInput.value})`);
+        const label = getCharacterSourceLabel(slot);
+        if (label) {
+          labels.push(label);
         }
       });
       if (labels.length > 0) {
@@ -2126,15 +2222,9 @@
         if (slot.layer && activePortraitUrl) {
           slot.layer.src = `${activePortraitUrl}?t=${Date.now()}`;
           slot.layer.classList.remove('is-hidden');
-          if (slot.slot === 1 && slot.portraitFilenameInput) {
-            slot.portraitFilenameInput.value = slot.portraitFilenameInput.value || initialPortraitFilename;
-          }
         } else if (slot.layer) {
           slot.layer.removeAttribute('src');
           slot.layer.classList.add('is-hidden');
-          if (slot.slot === 1 && slot.portraitFilenameInput && !useInitialPortrait && !slot.cacheKeyInput?.value) {
-            slot.portraitFilenameInput.value = '';
-          }
         }
       });
       applyPortraitLayoutState();
@@ -2890,11 +2980,35 @@
 
     function handleCharacterSourceChange(slot) {
       if (slot.slot === 1) {
-        useInitialPortrait = !slot.cacheKeyInput.value && Boolean(initialPortraitUrl);
+        normalizeCharacter1SourceState(slot.cacheKeyInput?.value ? 'preview' : 'portrait');
       }
       updatePreviewSources();
       renderScenePreviewLayers();
       scheduleScenePreview();
+    }
+
+    function handleCharacterPreviewSelectChange(slot) {
+      const selectedCacheKey = slot.cacheKeyInput?.value || '';
+      if (selectedCacheKey) {
+        const portraitFilename = slot.slot === 1
+          ? (slot.portraitFilenameInput?.value || lastSelectedPortraitFilename)
+          : (slot.portraitFilenameInput?.value || slot.cacheKeyInput?.dataset.portraitFilename || '');
+        if (slot.slot === 1 && portraitFilename) {
+          lastSelectedPortraitFilename = portraitFilename;
+        }
+        if (portraitFilename && slot.cacheKeyInput) {
+          slot.cacheKeyInput.dataset.portraitFilename = portraitFilename;
+        }
+        if (slot.portraitFilenameInput) {
+          slot.portraitFilenameInput.value = '';
+        }
+      } else if (slot.portraitFilenameInput && !slot.portraitFilenameInput.value) {
+        slot.portraitFilenameInput.value = slot.slot === 1
+          ? lastSelectedPortraitFilename
+          : (slot.cacheKeyInput?.dataset.portraitFilename || '');
+      }
+      updateCharacterPreviewSelectLabels();
+      handleCharacterSourceChange(slot);
     }
 
     baseImageInput?.addEventListener('change', async () => {
@@ -2929,16 +3043,10 @@
       }
     });
     cacheKeySelect?.addEventListener('change', () => {
-      if (portraitFilenameInput) {
-        portraitFilenameInput.value = '';
-      }
-      handleCharacterSourceChange(characterSlots[0]);
+      handleCharacterPreviewSelectChange(characterSlots[0]);
     });
     character2CacheKeySelect?.addEventListener('change', () => {
-      if (character2PortraitFilenameInput) {
-        character2PortraitFilenameInput.value = '';
-      }
-      handleCharacterSourceChange(characterSlots[1]);
+      handleCharacterPreviewSelectChange(characterSlots[1]);
     });
     baseLayer?.addEventListener('load', renderScenePreviewLayers);
     portraitLayer?.addEventListener('load', renderScenePreviewLayers);
