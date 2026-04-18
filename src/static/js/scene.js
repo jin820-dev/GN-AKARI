@@ -56,6 +56,7 @@
       {
         slot: 1,
         layerId: 'character1',
+        enabledStateKey: 'character1_enabled',
         enabledInput: document.getElementById('character1-enabled'),
         cacheKeyInput: document.getElementById('cache-key'),
         portraitFilenameInput: document.getElementById('portrait-filename'),
@@ -67,6 +68,7 @@
       {
         slot: 2,
         layerId: 'character2',
+        enabledStateKey: 'character2_enabled',
         enabledInput: document.getElementById('character2-enabled'),
         cacheKeyInput: document.getElementById('character2-cache-key'),
         portraitFilenameInput: document.getElementById('character2-portrait-filename'),
@@ -169,11 +171,15 @@
     }
 
     function getCharacterEnabledStateKey(slot) {
-      return slot.slot === 2 ? 'character2_enabled' : 'character1_enabled';
+      return slot.enabledStateKey;
     }
 
     function getActivePortraitLayoutKey(slot) {
       return slot.slot === 2 ? activeCharacter2PortraitLayoutKey : activePortraitLayoutKey;
+    }
+
+    function getCharacterSlotByNumber(slotNumber) {
+      return characterSlots.find((slot) => slot.slot === slotNumber) || character1SlotDef;
     }
 
     function getPortraitFilenameBeforePreviewSelection(slot) {
@@ -676,38 +682,24 @@
       initialPortraitSlot = 1;
     }
 
+    function applyInitialPortraitToSlot(slot, filename) {
+      setLastSelectedPortrait(slot, filename);
+      if (slot.portraitFilenameInput) {
+        slot.portraitFilenameInput.value = filename;
+      }
+      if (slot.cacheKeyInput) {
+        slot.cacheKeyInput.value = '';
+      }
+      if (slot.enabledInput) {
+        slot.enabledInput.checked = true;
+        updateVisibilityIcon(slot.enabledInput);
+      }
+      normalizeCharacterSourceState(slot, 'portrait');
+    }
+
     function commitInitialPortraitSelection() {
       if (!initialPortraitFilename) return;
-      if (initialPortraitSlot === 2) {
-        setLastSelectedPortrait(character2SlotDef, initialPortraitFilename);
-        if (character2PortraitFilenameInput) {
-          character2PortraitFilenameInput.value = initialPortraitFilename;
-        }
-        if (character2CacheKeySelect) {
-          character2CacheKeySelect.value = '';
-        }
-        if (character2EnabledInput) {
-          character2EnabledInput.checked = true;
-          updateVisibilityIcon(character2EnabledInput);
-        }
-        normalizeCharacterSourceState(character2SlotDef, 'portrait');
-        updateCharacterPreviewSelectLabels();
-        saveSceneState();
-        clearInitialPortraitSeed();
-        return;
-      }
-      setLastSelectedPortrait(character1SlotDef, initialPortraitFilename);
-      if (portraitFilenameInput) {
-        portraitFilenameInput.value = initialPortraitFilename;
-      }
-      if (cacheKeySelect) {
-        cacheKeySelect.value = '';
-      }
-      if (character1EnabledInput) {
-        character1EnabledInput.checked = true;
-        updateVisibilityIcon(character1EnabledInput);
-      }
-      normalizeCharacterSourceState(character1SlotDef, 'portrait');
+      applyInitialPortraitToSlot(getCharacterSlotByNumber(initialPortraitSlot), initialPortraitFilename);
       updateCharacterPreviewSelectLabels();
       saveSceneState();
       clearInitialPortraitSeed();
@@ -848,7 +840,7 @@
     }
 
     function getCharacter1PortraitLayoutKey() {
-      return getCharacterPortraitLayoutKey(characterSlots[0]);
+      return getCharacterPortraitLayoutKey(character1SlotDef);
     }
 
     function loadSceneUiState() {
@@ -901,7 +893,7 @@
       });
     }
 
-    function savePortraitLayoutState(layoutKey = getCharacter1PortraitLayoutKey(), slot = characterSlots[0]) {
+    function savePortraitLayoutState(layoutKey = getCharacter1PortraitLayoutKey(), slot = character1SlotDef) {
       if (!layoutKey) return;
 
       const layouts = loadPortraitLayoutState();
@@ -1962,7 +1954,7 @@
       )) || null;
     }
 
-    function applyImmediatePreviewUpdate({ savePortrait = true, portraitSlot = characterSlots[0] } = {}) {
+    function applyImmediatePreviewUpdate({ savePortrait = true, portraitSlot = character1SlotDef } = {}) {
       syncImmediatePreviewLayoutFromInputs();
       renderScenePreviewLayers();
       if (savePortrait) {
@@ -2102,7 +2094,7 @@
         requestCommittedPreviewUpdate({ server: false });
       });
       element?.addEventListener('input', () => {
-        applyImmediatePreviewUpdate({ portraitSlot: getCharacterSlotForLayoutInput(element) || characterSlots[0] });
+        applyImmediatePreviewUpdate({ portraitSlot: getCharacterSlotForLayoutInput(element) || character1SlotDef });
       });
     });
     committedPreviewInputs.forEach((element) => {
@@ -2243,10 +2235,10 @@
       }
     });
     cacheKeySelect?.addEventListener('change', () => {
-      handleCharacterPreviewSelectChange(characterSlots[0]);
+      handleCharacterPreviewSelectChange(character1SlotDef);
     });
     character2CacheKeySelect?.addEventListener('change', () => {
-      handleCharacterPreviewSelectChange(characterSlots[1]);
+      handleCharacterPreviewSelectChange(character2SlotDef);
     });
     baseLayer?.addEventListener('load', renderScenePreviewLayers);
     portraitLayer?.addEventListener('load', renderScenePreviewLayers);
