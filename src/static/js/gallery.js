@@ -3,6 +3,49 @@ const portraitGalleryGrid = document.getElementById('portrait-gallery-grid');
 const sceneGalleryGrid = document.getElementById('scene-gallery-grid');
 const portraitGalleryEmpty = document.getElementById('portrait-gallery-empty');
 const sceneGalleryEmpty = document.getElementById('scene-gallery-empty');
+const sceneStorageKey = 'gn_akari_scene_state';
+const minimumCharacterSlotCount = 3;
+
+function getSceneCharacterSlotCount() {
+  const counts = [minimumCharacterSlotCount];
+  try {
+    const raw = localStorage.getItem(sceneStorageKey);
+    const state = raw ? JSON.parse(raw) : null;
+    const storedCount = Number(state?.character_slot_count || 0);
+    if (storedCount > 0) {
+      counts.push(storedCount);
+    }
+    if (Array.isArray(state?.layer_order)) {
+      state.layer_order.forEach((layerId) => {
+        const match = String(layerId).match(/^character(\d+)$/);
+        if (match) {
+          counts.push(Number(match[1]) || 0);
+        }
+      });
+    }
+  } catch {
+    // Keep the fixed initial slots when scene state is unavailable.
+  }
+  return Math.max(...counts);
+}
+
+function initializePortraitSlotMenus() {
+  const slotCount = getSceneCharacterSlotCount();
+  document.querySelectorAll('[data-portrait-slot-menu]').forEach((menu) => {
+    const filename = menu.closest('.gallery-use-menu')?.querySelector('.gallery-action-button--use')?.dataset.filename || '';
+    menu.replaceChildren();
+    for (let slot = 1; slot <= slotCount; slot += 1) {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'portrait-slot-option';
+      option.dataset.filename = filename;
+      option.dataset.slot = String(slot);
+      option.textContent = `キャラ${slot}`;
+      option.addEventListener('click', () => usePortrait(filename, slot));
+      menu.appendChild(option);
+    }
+  });
+}
 
 function showStatus(message, isError = false) {
   if (!galleryStatus) return;
@@ -83,3 +126,5 @@ document.addEventListener('keydown', (event) => {
     closePortraitSlotMenus();
   }
 });
+
+initializePortraitSlotMenus();

@@ -66,6 +66,7 @@ SCENE_CANVAS_PRESETS = {
 SCENE_PREVIEW_SCALE = 0.5
 DEFAULT_SCENE_LAYER_ORDER = ["base_image", "message_band", "character1", "character2", "character3", "overlay_image", "text2", "text1"]
 DEFAULT_SCENE_LAYER_ORDER_MODE = "aviutl"
+SCENE_CHARACTER_LAYER_RE = re.compile(r"^character(\d+)$")
 
 app = Flask(__name__, template_folder=str(ROOT_DIR / "templates"))
 app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
@@ -1083,6 +1084,34 @@ def load_scene_character_input(
     }
 
 
+def load_scene_character_slot_numbers() -> list[int]:
+    slots = {1, 2, 3}
+    try:
+        slot_count = int(request.form.get("character_slot_count") or "0")
+    except ValueError:
+        slot_count = 0
+    if slot_count > 0:
+        slots.update(range(1, slot_count + 1))
+
+    raw_order = request.form.get("layer_order") or ""
+    try:
+        parsed_order = json.loads(raw_order)
+    except json.JSONDecodeError:
+        parsed_order = raw_order.split(",")
+    if isinstance(parsed_order, list):
+        for layer_id in parsed_order:
+            match = SCENE_CHARACTER_LAYER_RE.match(str(layer_id))
+            if match:
+                slots.add(int(match.group(1)))
+
+    for key in request.form.keys():
+        match = re.match(r"^character(\d+)_", key)
+        if match:
+            slots.add(int(match.group(1)))
+
+    return sorted(slot for slot in slots if slot >= 1)
+
+
 def load_scene_text_input(prefix: str = "text") -> dict:
     enabled_raw = request.form.get(f"{prefix}_enabled")
     enabled = enabled_raw in {"1", "true", "on"}
@@ -1336,7 +1365,11 @@ def normalize_scene_layer_order(raw_order) -> list[str]:
     normalized = []
     if isinstance(parsed_order, list):
         for layer_id in parsed_order:
-            if layer_id in DEFAULT_SCENE_LAYER_ORDER and layer_id not in normalized:
+            layer_id = str(layer_id)
+            if (
+                layer_id in DEFAULT_SCENE_LAYER_ORDER
+                or SCENE_CHARACTER_LAYER_RE.match(layer_id)
+            ) and layer_id not in normalized:
                 normalized.append(layer_id)
     for layer_id in DEFAULT_SCENE_LAYER_ORDER:
         if layer_id not in normalized:
@@ -1349,10 +1382,7 @@ def normalize_scene_layer_order_mode(raw_mode) -> str:
 
 
 def resolve_scene_layer_draw_order(layer_order, layer_order_mode: str) -> list[str]:
-    normalized_order = normalize_scene_layer_order(layer_order)
-    if normalize_scene_layer_order_mode(layer_order_mode) == "after_effects":
-        return list(reversed(normalized_order))
-    return normalized_order
+    return normalize_scene_layer_order(layer_order)
 
 
 def load_scene_layer_order() -> list[str]:
@@ -1434,22 +1464,25 @@ def load_scene_inputs() -> tuple[Image.Image, list[dict], dict, dict, dict, dict
             raise ValueError("base_image or base_image_name is required.")
         base = Image.open(base_image_path).convert("RGBA")
 
-    characters = [
-        load_scene_character_input(
-            "character1",
-            default_enabled=bool(
-                (request.form.get("cache_key") or "").strip()
-                or (request.form.get("portrait_filename") or "").strip()
-            ),
-            default_cache_key=(request.form.get("cache_key") or "").strip(),
-            default_portrait_filename=(request.form.get("portrait_filename") or "").strip(),
-            default_x=int(request.form.get("x", "0")),
-            default_y=int(request.form.get("y", "0")),
-            default_scale=int(request.form.get("scale", "100")),
-        ),
-        load_scene_character_input("character2"),
-        load_scene_character_input("character3"),
-    ]
+    characters = []
+    for slot_number in load_scene_character_slot_numbers():
+        if slot_number == 1:
+            characters.append(
+                load_scene_character_input(
+                    "character1",
+                    default_enabled=bool(
+                        (request.form.get("cache_key") or "").strip()
+                        or (request.form.get("portrait_filename") or "").strip()
+                    ),
+                    default_cache_key=(request.form.get("cache_key") or "").strip(),
+                    default_portrait_filename=(request.form.get("portrait_filename") or "").strip(),
+                    default_x=int(request.form.get("x", "0")),
+                    default_y=int(request.form.get("y", "0")),
+                    default_scale=int(request.form.get("scale", "100")),
+                )
+            )
+        else:
+            characters.append(load_scene_character_input(f"character{slot_number}"))
     active_characters = [character for character in characters if character["enabled"]]
     if not active_characters:
         raise ValueError("at least one character must be enabled.")
@@ -1583,14 +1616,14 @@ def compose_scene(
     draw_actions = {
         "base_image": draw_base_layer,
         "message_band": lambda: draw_message_band(result, message_band, position_scale),
-        "character1": lambda: draw_character_layer(characters_by_layer.get("character1")),
-        "character2": lambda: draw_character_layer(characters_by_layer.get("character2")),
-        "character3": lambda: draw_character_layer(characters_by_layer.get("character3")),
         "overlay_image": draw_overlay_layer,
         "text2": lambda: draw_scene_text(result, text2, position_scale),
         "text1": lambda: draw_scene_text(result, text, position_scale),
     }
     for layer_id in resolve_scene_layer_draw_order(layer_order, layer_order_mode):
+        if SCENE_CHARACTER_LAYER_RE.match(layer_id):
+            draw_character_layer(characters_by_layer.get(layer_id))
+            continue
         draw_actions[layer_id]()
     return result
 
@@ -1609,7 +1642,7 @@ def service_worker():
 def scene_page():
     selected_portrait_filename = (request.args.get("portrait") or "").strip()
     selected_portrait_slot_raw = (request.args.get("slot") or "").strip()
-    selected_portrait_slot = int(selected_portrait_slot_raw) if selected_portrait_slot_raw in {"2", "3"} else 1
+    selected_portrait_slot = int(selected_portrait_slot_raw) if selected_portrait_slot_raw.isdigit() and int(selected_portrait_slot_raw) >= 1 else 1
     selected_portrait_path = resolve_portrait_output_path(selected_portrait_filename)
     if selected_portrait_path is None:
         return render_scene_page()

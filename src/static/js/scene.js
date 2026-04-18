@@ -6,7 +6,7 @@
 
     // Scene state: initialPortraitFilename is a one-time URL seed; lastSelectedPortraitFilename is kept separately from the active source.
     let initialPortraitFilename = sceneBootstrap.initialPortraitFilename || '';
-    let initialPortraitSlot = [1, 2, 3].includes(Number(sceneBootstrap.initialPortraitSlot))
+    let initialPortraitSlot = Number(sceneBootstrap.initialPortraitSlot) >= 1
       ? Number(sceneBootstrap.initialPortraitSlot)
       : 1;
     const sceneStorageKey = 'gn_akari_scene_state';
@@ -25,6 +25,8 @@
     const previewCanvas = document.getElementById('preview-canvas');
     const layerOrderInput = document.getElementById('layer-order');
     const layerOrderModeInput = document.getElementById('layer-order-mode');
+    const addCharacterSlotButton = document.getElementById('add-character-slot');
+    const removeCharacterSlotButton = document.getElementById('remove-character-slot');
     const baseLayer = document.getElementById('base-layer');
     const messageBandLayer = document.getElementById('message-band-layer');
     const portraitLayer = document.getElementById('portrait-layer');
@@ -65,6 +67,15 @@
       block.dataset.sectionKey = slotDef.layerId;
       block.dataset.layerId = slotDef.layerId;
 
+      if (!document.getElementById(slotDef.domIds.portraitFilename)) {
+        const portraitFilenameInput = document.createElement('input');
+        portraitFilenameInput.type = 'hidden';
+        portraitFilenameInput.id = slotDef.domIds.portraitFilename;
+        portraitFilenameInput.name = getCharacterStateKey(slotDef, 'portraitFilename');
+        portraitFilenameInput.value = '';
+        block.appendChild(portraitFilenameInput);
+      }
+
       const header = document.createElement('button');
       header.type = 'button';
       header.className = 'settings-block-header';
@@ -75,7 +86,7 @@
       headerMain.className = 'settings-block-header-main';
       const title = document.createElement('h3');
       title.className = 'settings-block-title';
-      title.textContent = `キャラ${slotDef.slot}設定`;
+      title.textContent = `キャラ${slotDef.slot}`;
       headerMain.appendChild(title);
 
       const actions = document.createElement('span');
@@ -89,11 +100,17 @@
       enabledInput.type = 'checkbox';
       enabledInput.value = '1';
       enabledInput.checked = slotDef.enabledDefault === true;
+      enabledInput.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
       const visibilityIcon = document.createElement('span');
       visibilityIcon.className = 'visibility-icon';
       visibilityIcon.setAttribute('aria-hidden', 'true');
       visibleLabel.appendChild(enabledInput);
       visibleLabel.appendChild(visibilityIcon);
+      visibleLabel.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
       const collapseToggle = document.createElement('span');
       collapseToggle.className = 'settings-block-toggle';
       collapseToggle.setAttribute('aria-hidden', 'true');
@@ -178,6 +195,54 @@
       slotDef.scaleInput = document.getElementById(slotDef.domIds.scale);
     }
 
+    function buildCharacterSlotDef(slotNumber) {
+      const prefix = slotNumber === 1 ? '' : `character${slotNumber}_`;
+      return {
+        slot: slotNumber,
+        layerId: `character${slotNumber}`,
+        stateKeys: {
+          enabled: `character${slotNumber}_enabled`,
+          cacheKey: `${prefix}cache_key`,
+          portraitFilename: `${prefix}portrait_filename`,
+          lastSelectedPortraitFilename: `${prefix}last_selected_portrait_filename`,
+          x: slotNumber === 1 ? 'x' : `character${slotNumber}_x`,
+          y: slotNumber === 1 ? 'y' : `character${slotNumber}_y`,
+          scale: slotNumber === 1 ? 'scale' : `character${slotNumber}_scale`,
+        },
+        layoutKeyPrefix: slotNumber === 1 ? '' : `character${slotNumber}:`,
+        enabledDefault: slotNumber === 1,
+        lastSelectedPortraitFilename: '',
+        activeLayoutKey: '',
+        domIds: {
+          enabled: slotNumber === 1 ? 'character1-enabled' : `character${slotNumber}-enabled`,
+          cacheKey: slotNumber === 1 ? 'cache-key' : `character${slotNumber}-cache-key`,
+          portraitFilename: slotNumber === 1 ? 'portrait-filename' : `character${slotNumber}-portrait-filename`,
+          x: slotNumber === 1 ? 'position-x' : `character${slotNumber}-x`,
+          y: slotNumber === 1 ? 'position-y' : `character${slotNumber}-y`,
+          scale: slotNumber === 1 ? 'scale' : `character${slotNumber}-scale`,
+        },
+        layer: null,
+      };
+    }
+
+    function createCharacterPreviewLayer(slotDef) {
+      const layer = document.createElement('img');
+      layer.id = `portrait-layer-${slotDef.slot}`;
+      layer.className = 'preview-layer preview-layer--portrait is-hidden';
+      layer.alt = `portrait preview ${slotDef.slot}`;
+      previewCanvas?.appendChild(layer);
+      return layer;
+    }
+
+    function ensureCharacterPreviewLayer(slotDef) {
+      if (slotDef.layer) {
+        slotDef.layer.id = `portrait-layer-${slotDef.slot}`;
+        return;
+      }
+      slotDef.layer = document.getElementById(`portrait-layer-${slotDef.slot}`)
+        || createCharacterPreviewLayer(slotDef);
+    }
+
     const characterSlotDefs = [
       {
         slot: 1,
@@ -258,6 +323,7 @@
         layer: portraitLayer3,
       },
     ];
+    characterSlotDefs.forEach(ensureCharacterPreviewLayer);
     renderCharacterSlotBlocks();
     characterSlotDefs.forEach(bindCharacterSlotDomRefs);
     const character1SlotDef = characterSlotDefs[0];
@@ -302,6 +368,7 @@
     let baseDragState = null;
     let previewObjectDragState = null;
     let overlayResizeState = null;
+    let layerOrderDraggingBlock = null;
     let baseObjectUrl = null;
     let restoredBaseImageUrl = '';
     let indexedDbBaseImageBlob = null;
@@ -313,6 +380,7 @@
     let currentLayerOrderMode = 'aviutl';
     let currentLayerLocks = {};
     const loadedPreviewFonts = new Set();
+    const minimumCharacterSlotCount = 3;
     const defaultSectionOpenState = {
       base: true,
       canvas: false,
@@ -365,6 +433,37 @@
 
     function getCharacterSlotByNumber(slotNumber) {
       return characterSlots.find((slot) => slot.slot === slotNumber) || character1SlotDef;
+    }
+
+    function getCharacterSlotCountFromState(stored) {
+      const explicitCount = Number(stored?.character_slot_count || 0);
+      const counts = [minimumCharacterSlotCount, explicitCount];
+      const layerOrder = Array.isArray(stored?.layer_order) ? stored.layer_order : [];
+      layerOrder.forEach((layerId) => {
+        const match = String(layerId).match(/^character(\d+)$/);
+        if (match) {
+          counts.push(Number(match[1]) || 0);
+        }
+      });
+      Object.keys(stored || {}).forEach((key) => {
+        const match = key.match(/^character(\d+)_/);
+        if (match) {
+          counts.push(Number(match[1]) || 0);
+        }
+      });
+      return Math.max(...counts);
+    }
+
+    function ensureCharacterSlotCount(slotCount) {
+      while (characterSlots.length < slotCount) {
+        addCharacterSlot({ save: false });
+      }
+    }
+
+    function updateCharacterSlotControls() {
+      if (removeCharacterSlotButton) {
+        removeCharacterSlotButton.disabled = characterSlots.length <= minimumCharacterSlotCount;
+      }
     }
 
     function getPortraitFilenameBeforePreviewSelection(slot) {
@@ -503,6 +602,10 @@
     }
 
     function resolveLayerDrawOrder() {
+      return normalizeLayerOrder(currentLayerOrder);
+    }
+
+    function resolveLayerDisplayOrder() {
       const normalizedOrder = normalizeLayerOrder(currentLayerOrder);
       return currentLayerOrderMode === 'after_effects' ? [...normalizedOrder].reverse() : normalizedOrder;
     }
@@ -522,7 +625,7 @@
     function applyLayerOrderToSettingsBlocks() {
       if (!sceneForm) return;
       const saveButton = sceneForm.querySelector('button[type="submit"]');
-      currentLayerOrder.forEach((layerId) => {
+      resolveLayerDisplayOrder().forEach((layerId) => {
         const block = getLayerBlock(layerId);
         if (block && saveButton) {
           sceneForm.insertBefore(block, saveButton);
@@ -531,9 +634,10 @@
     }
 
     function updateLayerOrderFromSettingsBlocks() {
+      const displayOrder = Array.from(sceneForm?.querySelectorAll('.settings-block[data-layer-id]') || [])
+        .map((block) => block.dataset.layerId);
       currentLayerOrder = normalizeLayerOrder(
-        Array.from(sceneForm?.querySelectorAll('.settings-block[data-layer-id]') || [])
-          .map((block) => block.dataset.layerId),
+        currentLayerOrderMode === 'after_effects' ? [...displayOrder].reverse() : displayOrder,
       );
       updateLayerOrderInput();
     }
@@ -542,9 +646,7 @@
       currentLayerOrder = normalizeLayerOrder(currentLayerOrder);
       const currentIndex = currentLayerOrder.indexOf(layerId);
       if (currentIndex < 0) return;
-      const offset = currentLayerOrderMode === 'after_effects'
-        ? (direction === 'front' ? -1 : 1)
-        : (direction === 'front' ? 1 : -1);
+      const offset = direction === 'front' ? 1 : -1;
       const nextIndex = currentIndex + offset;
       if (nextIndex < 0 || nextIndex >= currentLayerOrder.length) return;
 
@@ -609,6 +711,7 @@
       resolveLayerDrawOrder().forEach((layerId, index) => {
         getPreviewLayerNodes(layerId).forEach((node) => {
           previewCanvas.appendChild(node);
+          node.style.order = String(index + 1);
           node.style.zIndex = String((index + 1) * 10);
         });
       });
@@ -772,6 +875,7 @@
     function buildSceneStatePayload() {
       characterSlots.forEach(normalizeCharacterSourceState);
       return {
+        character_slot_count: characterSlots.length,
         ...characterSlots.reduce((payload, slot) => ({
           ...payload,
           ...buildCharacterState(slot),
@@ -851,6 +955,7 @@
 
     function commitInitialPortraitSelection() {
       if (!initialPortraitFilename) return;
+      ensureCharacterSlotCount(initialPortraitSlot);
       applyInitialPortraitToSlot(getCharacterSlotByNumber(initialPortraitSlot), initialPortraitFilename);
       updateCharacterPreviewSelectLabels();
       saveSceneState();
@@ -864,6 +969,7 @@
         return;
       }
 
+      ensureCharacterSlotCount(getCharacterSlotCountFromState(stored));
       characterSlots.forEach((slot) => applyCharacterState(slot, stored));
       const storedCanvasPreset = stored.canvas_preset || stored.canvas_size || '';
       if (canvasPresetSelect && storedCanvasPreset && canvasPresets[storedCanvasPreset]) {
@@ -1024,14 +1130,15 @@
       toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
     }
 
-    function initializeSectionToggles() {
+    function applyStoredSectionOpenState(sectionKey) {
       const uiState = loadSceneUiState();
-      Object.entries(defaultSectionOpenState).forEach(([sectionKey, defaultOpen]) => {
-        const isOpen = uiState[sectionKey] ?? defaultOpen;
-        applySectionOpenState(sectionKey, isOpen);
-      });
+      const isOpen = uiState[sectionKey] ?? defaultSectionOpenState[sectionKey] ?? true;
+      applySectionOpenState(sectionKey, isOpen);
+    }
 
-      document.querySelectorAll('[data-settings-toggle]').forEach((toggle) => {
+    function registerSectionToggle(toggle) {
+      if (!toggle || toggle.dataset.sectionToggleBound === '1') return;
+      toggle.dataset.sectionToggleBound = '1';
         toggle.addEventListener('click', () => {
           const sectionKey = toggle.dataset.settingsToggle;
           if (!sectionKey) return;
@@ -1041,7 +1148,12 @@
           saveSceneUiState(nextState);
           applySectionOpenState(sectionKey, !currentOpen);
         });
-      });
+    }
+
+    function initializeSectionToggles() {
+      Object.keys(defaultSectionOpenState).forEach(applyStoredSectionOpenState);
+
+      document.querySelectorAll('[data-settings-toggle]').forEach(registerSectionToggle);
     }
 
     function savePortraitLayoutState(layoutKey = getCharacter1PortraitLayoutKey(), slot = character1SlotDef) {
@@ -1884,7 +1996,6 @@
 
     function initializeLayerOrderDrag() {
       if (!sceneForm) return;
-      let draggingBlock = null;
       sceneForm.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
         const headerMain = block.querySelector('.settings-block-header-main');
         if (!headerMain || headerMain.querySelector('.layer-drag-handle')) return;
@@ -1900,24 +2011,24 @@
           event.stopPropagation();
         });
         handle.addEventListener('dragstart', (event) => {
-          draggingBlock = block;
+          layerOrderDraggingBlock = block;
           block.classList.add('is-layer-dragging');
           event.dataTransfer.effectAllowed = 'move';
           event.dataTransfer.setData('text/plain', block.dataset.layerId || '');
         });
         handle.addEventListener('dragend', () => {
-          draggingBlock?.classList.remove('is-layer-dragging');
-          draggingBlock = null;
+          layerOrderDraggingBlock?.classList.remove('is-layer-dragging');
+          layerOrderDraggingBlock = null;
           updateLayerOrderFromSettingsBlocks();
           applyLayerOrderToPreviewDom();
           saveSceneState();
         });
         block.addEventListener('dragover', (event) => {
-          if (!draggingBlock || draggingBlock === block) return;
+          if (!layerOrderDraggingBlock || layerOrderDraggingBlock === block) return;
           event.preventDefault();
           const rect = block.getBoundingClientRect();
           const isAfter = event.clientY > rect.top + rect.height / 2;
-          sceneForm.insertBefore(draggingBlock, isAfter ? block.nextSibling : block);
+          sceneForm.insertBefore(layerOrderDraggingBlock, isAfter ? block.nextSibling : block);
         });
         headerMain.insertBefore(handle, headerMain.firstChild);
       });
@@ -1950,6 +2061,8 @@
         actions.insertBefore(frontButton, collapseToggle || actions.firstChild);
       });
 
+      if (sceneForm.dataset.layerMoveEventsBound === '1') return;
+      sceneForm.dataset.layerMoveEventsBound = '1';
       sceneForm.addEventListener('click', (event) => {
         const control = event.target.closest('[data-layer-move]');
         if (!control || !sceneForm.contains(control)) return;
@@ -2192,7 +2305,6 @@
       baseXInput,
       baseYInput,
       canvasPresetSelect,
-      ...characterSlots.flatMap((slot) => [slot.xInput, slot.yInput, slot.scaleInput]),
       bubbleOverlayXInput,
       bubbleOverlayYInput,
       bubbleOverlayWidthInput,
@@ -2243,14 +2355,7 @@
       });
     });
 
-    characterSlots.forEach((slot) => {
-      slot.enabledInput?.addEventListener('change', () => {
-        updateVisibilityIcon(slot.enabledInput);
-        updatePreviewSources();
-        renderScenePreviewLayers();
-        saveSceneState();
-      });
-    });
+    characterSlots.forEach(registerCharacterSlotEvents);
     textEnabledInput?.addEventListener('change', () => {
       updateVisibilityIcon(textEnabledInput);
       renderScenePreviewLayers();
@@ -2339,6 +2444,94 @@
       handleCharacterSourceChange(slot);
     }
 
+    function registerCharacterSlotEvents(slot) {
+      if (!slot || slot.eventsRegistered) return;
+      slot.eventsRegistered = true;
+      [slot.xInput, slot.yInput, slot.scaleInput].forEach((element) => {
+        element?.addEventListener('change', () => {
+          savePortraitLayoutState(getCharacterPortraitLayoutKey(slot), slot);
+          requestCommittedPreviewUpdate({ server: false });
+        });
+        element?.addEventListener('input', () => {
+          applyImmediatePreviewUpdate({ portraitSlot: slot });
+        });
+      });
+      slot.enabledInput?.addEventListener('change', () => {
+        updateVisibilityIcon(slot.enabledInput);
+        updatePreviewSources();
+        renderScenePreviewLayers();
+        saveSceneState();
+      });
+      slot.cacheKeyInput?.addEventListener('change', () => {
+        handleCharacterPreviewSelectChange(slot);
+      });
+      slot.layer?.addEventListener('load', renderScenePreviewLayers);
+      slot.onCommit = () => savePortraitLayoutState(getCharacterPortraitLayoutKey(slot), slot);
+      slot.syncPreviewLayoutPosition = () => {};
+      slot.layer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(slot, event));
+      slot.layer?.addEventListener('pointermove', updatePreviewObjectDrag);
+      slot.layer?.addEventListener('pointerup', endPreviewObjectDrag);
+      slot.layer?.addEventListener('pointercancel', endPreviewObjectDrag);
+    }
+
+    function addCharacterSlot({ save = true } = {}) {
+      const nextSlotNumber = Math.max(...characterSlots.map((slot) => slot.slot)) + 1;
+      const slot = buildCharacterSlotDef(nextSlotNumber);
+      slot.layer = createCharacterPreviewLayer(slot);
+      characterSlotDefs.push(slot);
+      defaultLayerOrder.push(slot.layerId);
+      currentLayerOrder.push(slot.layerId);
+      defaultSectionOpenState[slot.layerId] = true;
+      currentLayerLocks[slot.layerId] = false;
+
+      const block = createCharacterSlotBlock(slot);
+      document.getElementById('character-slots-container')?.appendChild(block);
+      bindCharacterSlotDomRefs(slot);
+      registerCharacterSlotEvents(slot);
+      registerSectionToggle(block.querySelector('[data-settings-toggle]'));
+      applyStoredSectionOpenState(slot.layerId);
+      updateVisibilityIcon(slot.enabledInput);
+      updateLayerOrderInput();
+      initializeLayerOrderDrag();
+      initializeLayerMoveControls();
+      initializeLayerLockControls();
+      updateLayerLockControls();
+      applyLayerOrderToPreviewDom();
+      if (save) {
+        saveSceneState();
+      }
+      updateCharacterSlotControls();
+    }
+
+    function removeLastCharacterSlot() {
+      if (characterSlots.length <= minimumCharacterSlotCount) return;
+      const slot = characterSlots[characterSlots.length - 1];
+      const layerId = slot.layerId;
+
+      savePortraitLayoutState(getCharacterPortraitLayoutKey(slot), slot);
+      document
+        .querySelector(`.settings-block[data-layer-id="${layerId}"]`)
+        ?.remove();
+      slot.layer?.remove();
+      characterSlots.pop();
+
+      const defaultIndex = defaultLayerOrder.indexOf(layerId);
+      if (defaultIndex >= 0) {
+        defaultLayerOrder.splice(defaultIndex, 1);
+      }
+      currentLayerOrder = currentLayerOrder.filter((id) => id !== layerId);
+      delete currentLayerLocks[layerId];
+      delete defaultSectionOpenState[layerId];
+
+      updateLayerOrderInput();
+      updateLayerLockControls();
+      applyLayerOrderToPreviewDom();
+      updateCurrentSourceLabel();
+      renderScenePreviewLayers();
+      saveSceneState();
+      updateCharacterSlotControls();
+    }
+
     baseImageInput?.addEventListener('change', async () => {
       const baseFile = baseImageInput.files?.[0];
       if (!baseFile) return;
@@ -2370,15 +2563,9 @@
         showSceneStatus(error.message || 'ベース画像の保存に失敗しました。', 'error');
       }
     });
-    characterSlots.forEach((slot) => {
-      slot.cacheKeyInput?.addEventListener('change', () => {
-        handleCharacterPreviewSelectChange(slot);
-      });
-    });
+    addCharacterSlotButton?.addEventListener('click', () => addCharacterSlot());
+    removeCharacterSlotButton?.addEventListener('click', removeLastCharacterSlot);
     baseLayer?.addEventListener('load', renderScenePreviewLayers);
-    characterSlots.forEach((slot) => {
-      slot.layer?.addEventListener('load', renderScenePreviewLayers);
-    });
     bubbleOverlayLayer?.addEventListener('load', renderScenePreviewLayers);
     window.addEventListener('resize', renderScenePreviewLayers);
     function buildTextDragSlot(slotName, layerId, xInput, yInput, layer) {
@@ -2425,14 +2612,6 @@
         bubbleOverlayLayout.height = Math.round(height * previewScaleFactor);
       },
     };
-    characterSlots.forEach((slot) => {
-      slot.onCommit = () => savePortraitLayoutState(getCharacterPortraitLayoutKey(slot), slot);
-      slot.syncPreviewLayoutPosition = () => {};
-      slot.layer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(slot, event));
-      slot.layer?.addEventListener('pointermove', updatePreviewObjectDrag);
-      slot.layer?.addEventListener('pointerup', endPreviewObjectDrag);
-      slot.layer?.addEventListener('pointercancel', endPreviewObjectDrag);
-    });
     textLayer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(textDragSlot, event));
     textLayer?.addEventListener('pointermove', updatePreviewObjectDrag);
     textLayer?.addEventListener('pointerup', endPreviewObjectDrag);
@@ -2491,6 +2670,7 @@
       await runInitialScenePreview();
       updateCurrentSourceLabel();
       updateBaseImageSourceLabel();
+      updateCharacterSlotControls();
       saveSceneState();
     }
 
