@@ -102,131 +102,7 @@
           </div>
         </div>
 
-        <div class="settings-block" data-section-key="character1" data-layer-id="character1">
-          <button type="button" class="settings-block-header" data-settings-toggle="character1" aria-expanded="true">
-            <span class="settings-block-header-main">
-              <h3 class="settings-block-title">キャラ1設定</h3>
-            </span>
-            <span class="settings-block-header-actions">
-              <label class="section-visible-toggle" for="character1-enabled">
-                <input id="character1-enabled" name="character1_enabled" type="checkbox" value="1" checked>
-                <span class="visibility-icon" aria-hidden="true"></span>
-              </label>
-              <span class="settings-block-toggle" aria-hidden="true"></span>
-            </span>
-          </button>
-          <div class="settings-block-body">
-          <div class="field">
-            <label for="cache-key">Preview</label>
-            <select id="cache-key" name="cache_key">
-              <option value="">preview を選択してください</option>
-              {% for source in preview_sources %}
-              <option value="{{ source.cache_key }}" {% if not source.preview_available %}disabled{% endif %}>
-                {{ source.psd_filename }} ({{ source.cache_key }}){% if not source.preview_available %} - preview未生成{% endif %}
-              </option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="row">
-            <div class="field">
-              <label for="position-x">X</label>
-              <input id="position-x" name="x" type="number" value="0">
-            </div>
-            <div class="field">
-              <label for="position-y">Y</label>
-              <input id="position-y" name="y" type="number" value="0">
-            </div>
-            <div class="field">
-              <label for="scale">Scale</label>
-              <input id="scale" name="scale" type="number" value="100" min="1">
-            </div>
-          </div>
-          </div>
-        </div>
-
-        <div class="settings-block" data-section-key="character2" data-layer-id="character2">
-          <button type="button" class="settings-block-header" data-settings-toggle="character2" aria-expanded="true">
-            <span class="settings-block-header-main">
-              <h3 class="settings-block-title">キャラ2設定</h3>
-            </span>
-            <span class="settings-block-header-actions">
-              <label class="section-visible-toggle" for="character2-enabled">
-                <input id="character2-enabled" name="character2_enabled" type="checkbox" value="1">
-                <span class="visibility-icon" aria-hidden="true"></span>
-              </label>
-              <span class="settings-block-toggle" aria-hidden="true"></span>
-            </span>
-          </button>
-          <div class="settings-block-body">
-          <div class="field">
-            <label for="character2-cache-key">Preview</label>
-            <select id="character2-cache-key" name="character2_cache_key">
-              <option value="">preview を選択してください</option>
-              {% for source in preview_sources %}
-              <option value="{{ source.cache_key }}" {% if not source.preview_available %}disabled{% endif %}>
-                {{ source.psd_filename }} ({{ source.cache_key }}){% if not source.preview_available %} - preview未生成{% endif %}
-              </option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="row">
-            <div class="field">
-              <label for="character2-x">X</label>
-              <input id="character2-x" name="character2_x" type="number" value="0">
-            </div>
-            <div class="field">
-              <label for="character2-y">Y</label>
-              <input id="character2-y" name="character2_y" type="number" value="0">
-            </div>
-            <div class="field">
-              <label for="character2-scale">Scale</label>
-              <input id="character2-scale" name="character2_scale" type="number" value="100" min="1">
-            </div>
-          </div>
-          </div>
-        </div>
-
-        <div class="settings-block" data-section-key="character3" data-layer-id="character3">
-          <button type="button" class="settings-block-header" data-settings-toggle="character3" aria-expanded="true">
-            <span class="settings-block-header-main">
-              <h3 class="settings-block-title">キャラ3設定</h3>
-            </span>
-            <span class="settings-block-header-actions">
-              <label class="section-visible-toggle" for="character3-enabled">
-                <input id="character3-enabled" name="character3_enabled" type="checkbox" value="1">
-                <span class="visibility-icon" aria-hidden="true"></span>
-              </label>
-              <span class="settings-block-toggle" aria-hidden="true"></span>
-            </span>
-          </button>
-          <div class="settings-block-body">
-          <div class="field">
-            <label for="character3-cache-key">Preview</label>
-            <select id="character3-cache-key" name="character3_cache_key">
-              <option value="">preview を選択してください</option>
-              {% for source in preview_sources %}
-              <option value="{{ source.cache_key }}" {% if not source.preview_available %}disabled{% endif %}>
-                {{ source.psd_filename }} ({{ source.cache_key }}){% if not source.preview_available %} - preview未生成{% endif %}
-              </option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="row">
-            <div class="field">
-              <label for="character3-x">X</label>
-              <input id="character3-x" name="character3_x" type="number" value="0">
-            </div>
-            <div class="field">
-              <label for="character3-y">Y</label>
-              <input id="character3-y" name="character3_y" type="number" value="0">
-            </div>
-            <div class="field">
-              <label for="character3-scale">Scale</label>
-              <input id="character3-scale" name="character3_scale" type="number" value="100" min="1">
-            </div>
-          </div>
-          </div>
-        </div>
+        <div id="character-slots-container"></div>
 
         <div class="settings-block" data-section-key="text" data-layer-id="text1">
           <button type="button" class="settings-block-header" data-settings-toggle="text" aria-expanded="true">
@@ -515,6 +391,7 @@
     window.sceneBootstrap = {
       canvasPresets: {{ canvas_presets | tojson }},
       bubbleOverlayAssets: {{ bubble_overlay_assets | tojson }},
+      previewSources: {{ preview_sources | tojson }},
       initialPortraitFilename: {{ (selected_portrait_filename or '') | tojson }},
       initialPortraitSlot: {{ selected_portrait_slot or 1 }}
     };

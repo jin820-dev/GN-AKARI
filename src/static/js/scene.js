@@ -1,6 +1,7 @@
     const sceneBootstrap = window.sceneBootstrap || {};
     const canvasPresets = sceneBootstrap.canvasPresets || {};
     const bubbleOverlayAssets = sceneBootstrap.bubbleOverlayAssets || {};
+    const previewSources = sceneBootstrap.previewSources || [];
     const previewScaleFactor = 0.5;
 
     // Scene state: initialPortraitFilename is a one-time URL seed; lastSelectedPortraitFilename is kept separately from the active source.
@@ -53,6 +54,130 @@
     const baseXInput = document.getElementById('base-x');
     const baseYInput = document.getElementById('base-y');
     const canvasPresetSelect = document.getElementById('canvas-preset');
+
+    function appendText(parent, text) {
+      parent.appendChild(document.createTextNode(text));
+    }
+
+    function createCharacterSlotBlock(slotDef) {
+      const block = document.createElement('div');
+      block.className = 'settings-block';
+      block.dataset.sectionKey = slotDef.layerId;
+      block.dataset.layerId = slotDef.layerId;
+
+      const header = document.createElement('button');
+      header.type = 'button';
+      header.className = 'settings-block-header';
+      header.dataset.settingsToggle = slotDef.layerId;
+      header.setAttribute('aria-expanded', 'true');
+
+      const headerMain = document.createElement('span');
+      headerMain.className = 'settings-block-header-main';
+      const title = document.createElement('h3');
+      title.className = 'settings-block-title';
+      title.textContent = `キャラ${slotDef.slot}設定`;
+      headerMain.appendChild(title);
+
+      const actions = document.createElement('span');
+      actions.className = 'settings-block-header-actions';
+      const visibleLabel = document.createElement('label');
+      visibleLabel.className = 'section-visible-toggle';
+      visibleLabel.htmlFor = slotDef.domIds.enabled;
+      const enabledInput = document.createElement('input');
+      enabledInput.id = slotDef.domIds.enabled;
+      enabledInput.name = getCharacterStateKey(slotDef, 'enabled');
+      enabledInput.type = 'checkbox';
+      enabledInput.value = '1';
+      enabledInput.checked = slotDef.enabledDefault === true;
+      const visibilityIcon = document.createElement('span');
+      visibilityIcon.className = 'visibility-icon';
+      visibilityIcon.setAttribute('aria-hidden', 'true');
+      visibleLabel.appendChild(enabledInput);
+      visibleLabel.appendChild(visibilityIcon);
+      const collapseToggle = document.createElement('span');
+      collapseToggle.className = 'settings-block-toggle';
+      collapseToggle.setAttribute('aria-hidden', 'true');
+      actions.appendChild(visibleLabel);
+      actions.appendChild(collapseToggle);
+
+      header.appendChild(headerMain);
+      header.appendChild(actions);
+
+      const body = document.createElement('div');
+      body.className = 'settings-block-body';
+
+      const previewField = document.createElement('div');
+      previewField.className = 'field';
+      const previewLabel = document.createElement('label');
+      previewLabel.htmlFor = slotDef.domIds.cacheKey;
+      previewLabel.textContent = 'Preview';
+      const cacheSelect = document.createElement('select');
+      cacheSelect.id = slotDef.domIds.cacheKey;
+      cacheSelect.name = getCharacterStateKey(slotDef, 'cacheKey');
+      const placeholderOption = document.createElement('option');
+      placeholderOption.value = '';
+      placeholderOption.textContent = 'preview を選択してください';
+      cacheSelect.appendChild(placeholderOption);
+      previewSources.forEach((source) => {
+        const option = document.createElement('option');
+        option.value = source.cache_key;
+        option.disabled = !source.preview_available;
+        appendText(option, `${source.psd_filename} (${source.cache_key})`);
+        if (!source.preview_available) {
+          appendText(option, ' - preview未生成');
+        }
+        cacheSelect.appendChild(option);
+      });
+      previewField.appendChild(previewLabel);
+      previewField.appendChild(cacheSelect);
+
+      const row = document.createElement('div');
+      row.className = 'row';
+      [
+        { label: 'X', id: slotDef.domIds.x, name: getCharacterStateKey(slotDef, 'x'), value: '0' },
+        { label: 'Y', id: slotDef.domIds.y, name: getCharacterStateKey(slotDef, 'y'), value: '0' },
+        { label: 'Scale', id: slotDef.domIds.scale, name: getCharacterStateKey(slotDef, 'scale'), value: '100', min: '1' },
+      ].forEach((fieldDef) => {
+        const field = document.createElement('div');
+        field.className = 'field';
+        const label = document.createElement('label');
+        label.htmlFor = fieldDef.id;
+        label.textContent = fieldDef.label;
+        const input = document.createElement('input');
+        input.id = fieldDef.id;
+        input.name = fieldDef.name;
+        input.type = 'number';
+        input.value = fieldDef.value;
+        if (fieldDef.min) {
+          input.min = fieldDef.min;
+        }
+        field.appendChild(label);
+        field.appendChild(input);
+        row.appendChild(field);
+      });
+
+      body.appendChild(previewField);
+      body.appendChild(row);
+      block.appendChild(header);
+      block.appendChild(body);
+      return block;
+    }
+
+    function renderCharacterSlotBlocks() {
+      const container = document.getElementById('character-slots-container');
+      if (!container) return;
+      container.replaceChildren(...characterSlotDefs.map(createCharacterSlotBlock));
+    }
+
+    function bindCharacterSlotDomRefs(slotDef) {
+      slotDef.enabledInput = document.getElementById(slotDef.domIds.enabled);
+      slotDef.cacheKeyInput = document.getElementById(slotDef.domIds.cacheKey);
+      slotDef.portraitFilenameInput = document.getElementById(slotDef.domIds.portraitFilename);
+      slotDef.xInput = document.getElementById(slotDef.domIds.x);
+      slotDef.yInput = document.getElementById(slotDef.domIds.y);
+      slotDef.scaleInput = document.getElementById(slotDef.domIds.scale);
+    }
+
     const characterSlotDefs = [
       {
         slot: 1,
@@ -70,12 +195,14 @@
         enabledDefault: true,
         lastSelectedPortraitFilename: '',
         activeLayoutKey: '',
-        enabledInput: document.getElementById('character1-enabled'),
-        cacheKeyInput: document.getElementById('cache-key'),
-        portraitFilenameInput: document.getElementById('portrait-filename'),
-        xInput: document.getElementById('position-x'),
-        yInput: document.getElementById('position-y'),
-        scaleInput: document.getElementById('scale'),
+        domIds: {
+          enabled: 'character1-enabled',
+          cacheKey: 'cache-key',
+          portraitFilename: 'portrait-filename',
+          x: 'position-x',
+          y: 'position-y',
+          scale: 'scale',
+        },
         layer: portraitLayer,
       },
       {
@@ -94,12 +221,14 @@
         enabledDefault: false,
         lastSelectedPortraitFilename: '',
         activeLayoutKey: '',
-        enabledInput: document.getElementById('character2-enabled'),
-        cacheKeyInput: document.getElementById('character2-cache-key'),
-        portraitFilenameInput: document.getElementById('character2-portrait-filename'),
-        xInput: document.getElementById('character2-x'),
-        yInput: document.getElementById('character2-y'),
-        scaleInput: document.getElementById('character2-scale'),
+        domIds: {
+          enabled: 'character2-enabled',
+          cacheKey: 'character2-cache-key',
+          portraitFilename: 'character2-portrait-filename',
+          x: 'character2-x',
+          y: 'character2-y',
+          scale: 'character2-scale',
+        },
         layer: portraitLayer2,
       },
       {
@@ -118,15 +247,19 @@
         enabledDefault: false,
         lastSelectedPortraitFilename: '',
         activeLayoutKey: '',
-        enabledInput: document.getElementById('character3-enabled'),
-        cacheKeyInput: document.getElementById('character3-cache-key'),
-        portraitFilenameInput: document.getElementById('character3-portrait-filename'),
-        xInput: document.getElementById('character3-x'),
-        yInput: document.getElementById('character3-y'),
-        scaleInput: document.getElementById('character3-scale'),
+        domIds: {
+          enabled: 'character3-enabled',
+          cacheKey: 'character3-cache-key',
+          portraitFilename: 'character3-portrait-filename',
+          x: 'character3-x',
+          y: 'character3-y',
+          scale: 'character3-scale',
+        },
         layer: portraitLayer3,
       },
     ];
+    renderCharacterSlotBlocks();
+    characterSlotDefs.forEach(bindCharacterSlotDomRefs);
     const character1SlotDef = characterSlotDefs[0];
     const textEnabledInput = document.getElementById('text-enabled');
     const textValueInput = document.getElementById('text-value');
