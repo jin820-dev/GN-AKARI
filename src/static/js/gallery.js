@@ -20,8 +20,29 @@ function updateEmptyState(kind) {
 
 function usePortrait(filename, slot = 1) {
   if (!filename) return;
-  const slotParam = slot === 2 ? '&slot=2' : '';
+  const slotNumber = Number(slot) || 1;
+  const slotParam = slotNumber > 1 ? `&slot=${encodeURIComponent(slotNumber)}` : '';
   window.location.href = "/scene?portrait=" + encodeURIComponent(filename) + slotParam;
+}
+
+function closePortraitSlotMenus(exceptMenu = null) {
+  document.querySelectorAll('[data-portrait-slot-menu]').forEach((menu) => {
+    if (menu === exceptMenu) return;
+    menu.hidden = true;
+    menu.closest('.gallery-item')?.classList.remove('is-menu-open');
+    const button = menu.closest('.gallery-use-menu')?.querySelector('.gallery-action-button--use');
+    button?.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function togglePortraitSlotMenu(button) {
+  const menu = button?.closest('.gallery-use-menu')?.querySelector('[data-portrait-slot-menu]');
+  if (!menu) return;
+  const willOpen = menu.hidden;
+  closePortraitSlotMenus(menu);
+  menu.hidden = !willOpen;
+  menu.closest('.gallery-item')?.classList.toggle('is-menu-open', willOpen);
+  button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
 }
 
 async function deleteGalleryImage(kind, filename) {
@@ -51,3 +72,14 @@ async function deleteGalleryImage(kind, filename) {
     showStatus(error.message || '画像の削除に失敗しました。', true);
   }
 }
+
+document.addEventListener('click', (event) => {
+  if (event.target.closest('.gallery-use-menu')) return;
+  closePortraitSlotMenus();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closePortraitSlotMenus();
+  }
+});

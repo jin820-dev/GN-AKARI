@@ -85,6 +85,7 @@ h2 {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  position: relative;
 }
 .gallery-link {
   display: block;
@@ -117,6 +118,11 @@ h2 {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  position: relative;
+  overflow: visible;
+}
+.gallery-use-menu {
+  position: static;
 }
 .gallery-action-button {
   width: 36px;
@@ -134,6 +140,40 @@ h2 {
 .gallery-action-button:hover {
   background: var(--akari-soft);
   border-color: var(--akari-accent);
+}
+.gallery-action-button--use {
+  font-size: 18px;
+}
+.portrait-slot-menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 88px;
+  padding: 6px;
+  border: 1px solid var(--akari-border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 20px rgba(90, 58, 27, 0.16);
+}
+.portrait-slot-menu[hidden] {
+  display: none;
+}
+.gallery-item.is-menu-open {
+  z-index: 20;
+}
+.portrait-slot-option {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 8px 10px;
+  border-radius: 6px;
+  box-shadow: none;
+  background: transparent;
+}
+.portrait-slot-option:hover {
+  background: var(--akari-soft);
 }
 .gallery-action-button--delete {
   color: #8f2b1d;
