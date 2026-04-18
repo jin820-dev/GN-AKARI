@@ -51,19 +51,45 @@
     const baseScaleInput = document.getElementById('base-scale');
     const baseXInput = document.getElementById('base-x');
     const baseYInput = document.getElementById('base-y');
-    const character1EnabledInput = document.getElementById('character1-enabled');
-    const cacheKeySelect = document.getElementById('cache-key');
-    const portraitFilenameInput = document.getElementById('portrait-filename');
-    const character2EnabledInput = document.getElementById('character2-enabled');
-    const character2CacheKeySelect = document.getElementById('character2-cache-key');
-    const character2PortraitFilenameInput = document.getElementById('character2-portrait-filename');
     const canvasPresetSelect = document.getElementById('canvas-preset');
-    const positionXInput = document.getElementById('position-x');
-    const positionYInput = document.getElementById('position-y');
-    const scaleInput = document.getElementById('scale');
-    const character2XInput = document.getElementById('character2-x');
-    const character2YInput = document.getElementById('character2-y');
-    const character2ScaleInput = document.getElementById('character2-scale');
+    const characterSlotDefs = [
+      {
+        slot: 1,
+        layerId: 'character1',
+        enabledInput: document.getElementById('character1-enabled'),
+        cacheKeyInput: document.getElementById('cache-key'),
+        portraitFilenameInput: document.getElementById('portrait-filename'),
+        xInput: document.getElementById('position-x'),
+        yInput: document.getElementById('position-y'),
+        scaleInput: document.getElementById('scale'),
+        layer: portraitLayer,
+      },
+      {
+        slot: 2,
+        layerId: 'character2',
+        enabledInput: document.getElementById('character2-enabled'),
+        cacheKeyInput: document.getElementById('character2-cache-key'),
+        portraitFilenameInput: document.getElementById('character2-portrait-filename'),
+        xInput: document.getElementById('character2-x'),
+        yInput: document.getElementById('character2-y'),
+        scaleInput: document.getElementById('character2-scale'),
+        layer: portraitLayer2,
+      },
+    ];
+    const character1SlotDef = characterSlotDefs[0];
+    const character2SlotDef = characterSlotDefs[1];
+    const character1EnabledInput = character1SlotDef.enabledInput;
+    const cacheKeySelect = character1SlotDef.cacheKeyInput;
+    const portraitFilenameInput = character1SlotDef.portraitFilenameInput;
+    const positionXInput = character1SlotDef.xInput;
+    const positionYInput = character1SlotDef.yInput;
+    const scaleInput = character1SlotDef.scaleInput;
+    const character2EnabledInput = character2SlotDef.enabledInput;
+    const character2CacheKeySelect = character2SlotDef.cacheKeyInput;
+    const character2PortraitFilenameInput = character2SlotDef.portraitFilenameInput;
+    const character2XInput = character2SlotDef.xInput;
+    const character2YInput = character2SlotDef.yInput;
+    const character2ScaleInput = character2SlotDef.scaleInput;
     const textEnabledInput = document.getElementById('text-enabled');
     const textValueInput = document.getElementById('text-value');
     const textFontSelect = document.getElementById('text-font');
@@ -128,30 +154,20 @@
       'message-band': true,
       overlay: true,
     };
-    const characterSlots = [
-      {
-        slot: 1,
-        layerId: 'character1',
-        enabledInput: character1EnabledInput,
-        cacheKeyInput: cacheKeySelect,
-        portraitFilenameInput,
-        xInput: positionXInput,
-        yInput: positionYInput,
-        scaleInput,
-        layer: portraitLayer,
-      },
-      {
-        slot: 2,
-        layerId: 'character2',
-        enabledInput: character2EnabledInput,
-        cacheKeyInput: character2CacheKeySelect,
-        portraitFilenameInput: character2PortraitFilenameInput,
-        xInput: character2XInput,
-        yInput: character2YInput,
-        scaleInput: character2ScaleInput,
-        layer: portraitLayer2,
-      },
-    ];
+    const characterSlots = characterSlotDefs;
+
+    function getLastSelectedPortrait(slot) {
+      return slot?.slot === 2 ? lastSelectedCharacter2PortraitFilename : lastSelectedPortraitFilename;
+    }
+
+    function setLastSelectedPortrait(slot, filename) {
+      if (slot?.slot === 2) {
+        lastSelectedCharacter2PortraitFilename = filename || '';
+      } else {
+        lastSelectedPortraitFilename = filename || '';
+      }
+    }
+
     const textSettingSlots = [
       {
         key: 'text',
@@ -450,73 +466,43 @@
     }
 
     // Scene state helpers: normalize, serialize, restore, and consume the one-time portrait seed.
-    function normalizeCharacter1SourceState(preferredSource = '') {
-      const portraitFilename = portraitFilenameInput?.value || '';
-      const cacheKey = cacheKeySelect?.value || '';
+    function normalizeCharacterSourceState(slot, preferredSource = '') {
+      const portraitFilename = slot.portraitFilenameInput?.value || '';
+      const cacheKey = slot.cacheKeyInput?.value || '';
+      const storedPortraitFilename = slot.slot === 2
+        ? (slot.cacheKeyInput?.dataset.portraitFilename || getLastSelectedPortrait(slot) || '')
+        : '';
 
       if (preferredSource === 'preview' && cacheKey) {
-        if (portraitFilenameInput) {
-          portraitFilenameInput.value = '';
+        if (slot.portraitFilenameInput) {
+          slot.portraitFilenameInput.value = '';
         }
         return 'preview';
       }
 
       if (portraitFilename) {
-        lastSelectedPortraitFilename = portraitFilename;
-        if (cacheKeySelect) {
-          cacheKeySelect.value = '';
-          cacheKeySelect.dataset.portraitFilename = lastSelectedPortraitFilename;
+        setLastSelectedPortrait(slot, portraitFilename);
+        if (slot.cacheKeyInput) {
+          slot.cacheKeyInput.value = '';
+          slot.cacheKeyInput.dataset.portraitFilename = getLastSelectedPortrait(slot);
         }
         return 'portrait';
       }
 
       if (cacheKey) {
-        if (portraitFilenameInput) {
-          portraitFilenameInput.value = '';
-        }
-        return 'preview';
-      }
-
-      return '';
-    }
-
-    function normalizeCharacter2SourceState(preferredSource = '') {
-      const portraitFilename = character2PortraitFilenameInput?.value || '';
-      const cacheKey = character2CacheKeySelect?.value || '';
-      const storedPortraitFilename = character2CacheKeySelect?.dataset.portraitFilename
-        || lastSelectedCharacter2PortraitFilename
-        || '';
-
-      if (preferredSource === 'preview' && cacheKey) {
-        if (character2PortraitFilenameInput) {
-          character2PortraitFilenameInput.value = '';
-        }
-        return 'preview';
-      }
-
-      if (portraitFilename) {
-        lastSelectedCharacter2PortraitFilename = portraitFilename;
-        if (character2CacheKeySelect) {
-          character2CacheKeySelect.value = '';
-          character2CacheKeySelect.dataset.portraitFilename = lastSelectedCharacter2PortraitFilename;
-        }
-        return 'portrait';
-      }
-
-      if (cacheKey) {
-        if (character2PortraitFilenameInput) {
-          character2PortraitFilenameInput.value = '';
+        if (slot.portraitFilenameInput) {
+          slot.portraitFilenameInput.value = '';
         }
         return 'preview';
       }
 
       if (storedPortraitFilename) {
-        lastSelectedCharacter2PortraitFilename = storedPortraitFilename;
-        if (character2CacheKeySelect) {
-          character2CacheKeySelect.dataset.portraitFilename = lastSelectedCharacter2PortraitFilename;
+        setLastSelectedPortrait(slot, storedPortraitFilename);
+        if (slot.cacheKeyInput) {
+          slot.cacheKeyInput.dataset.portraitFilename = getLastSelectedPortrait(slot);
         }
-        if (character2PortraitFilenameInput) {
-          character2PortraitFilenameInput.value = lastSelectedCharacter2PortraitFilename;
+        if (slot.portraitFilenameInput) {
+          slot.portraitFilenameInput.value = getLastSelectedPortrait(slot);
         }
         return 'portrait';
       }
@@ -524,24 +510,94 @@
       return '';
     }
 
-    function buildSceneStatePayload() {
-      normalizeCharacter1SourceState();
-      normalizeCharacter2SourceState();
+    function buildCharacterState(slot) {
+      if (slot.slot === 2) {
+        return {
+          character2_enabled: slot.enabledInput?.checked ? '1' : '0',
+          character2_cache_key: slot.cacheKeyInput?.value || '',
+          character2_portrait_filename: slot.portraitFilenameInput?.value || '',
+          character2_last_selected_portrait_filename: getLastSelectedPortrait(slot) || '',
+          character2_x: slot.xInput?.value || '0',
+          character2_y: slot.yInput?.value || '0',
+          character2_scale: slot.scaleInput?.value || '100',
+        };
+      }
       return {
-        character1_enabled: character1EnabledInput?.checked ? '1' : '0',
-        cache_key: cacheKeySelect?.value || '',
-        portrait_filename: portraitFilenameInput?.value || '',
-        last_selected_portrait_filename: lastSelectedPortraitFilename || '',
-        scale: scaleInput?.value || '100',
-        x: positionXInput?.value || '0',
-        y: positionYInput?.value || '0',
-        character2_enabled: character2EnabledInput?.checked ? '1' : '0',
-        character2_cache_key: character2CacheKeySelect?.value || '',
-        character2_portrait_filename: character2PortraitFilenameInput?.value || '',
-        character2_last_selected_portrait_filename: lastSelectedCharacter2PortraitFilename || '',
-        character2_x: character2XInput?.value || '0',
-        character2_y: character2YInput?.value || '0',
-        character2_scale: character2ScaleInput?.value || '100',
+        character1_enabled: slot.enabledInput?.checked ? '1' : '0',
+        cache_key: slot.cacheKeyInput?.value || '',
+        portrait_filename: slot.portraitFilenameInput?.value || '',
+        last_selected_portrait_filename: getLastSelectedPortrait(slot) || '',
+        scale: slot.scaleInput?.value || '100',
+        x: slot.xInput?.value || '0',
+        y: slot.yInput?.value || '0',
+      };
+    }
+
+    function applyCharacterState(slot, stored) {
+      if (slot.slot === 2) {
+        const storedPortraitFilename = stored.character2_portrait_filename || '';
+        const storedLastPortraitFilename = stored.character2_last_selected_portrait_filename
+          || storedPortraitFilename
+          || '';
+        const storedCacheKey = stored.character2_cache_key || '';
+        setLastSelectedPortrait(slot, storedLastPortraitFilename);
+        if (slot.enabledInput) {
+          slot.enabledInput.checked = stored.character2_enabled === '1';
+          updateVisibilityIcon(slot.enabledInput);
+        }
+        if (slot.cacheKeyInput) {
+          slot.cacheKeyInput.value = storedPortraitFilename ? '' : storedCacheKey;
+          if (storedLastPortraitFilename) {
+            slot.cacheKeyInput.dataset.portraitFilename = storedLastPortraitFilename;
+          }
+        }
+        if (slot.portraitFilenameInput && storedPortraitFilename) {
+          slot.portraitFilenameInput.value = storedPortraitFilename;
+        }
+        normalizeCharacterSourceState(slot, storedPortraitFilename ? 'portrait' : 'preview');
+        if (slot.xInput && stored.character2_x) {
+          slot.xInput.value = stored.character2_x;
+        }
+        if (slot.yInput && stored.character2_y) {
+          slot.yInput.value = stored.character2_y;
+        }
+        if (slot.scaleInput && stored.character2_scale) {
+          slot.scaleInput.value = stored.character2_scale;
+        }
+        return;
+      }
+
+      const storedPortraitFilename = stored.portrait_filename || '';
+      const storedCacheKey = stored.cache_key || '';
+      setLastSelectedPortrait(slot, stored.last_selected_portrait_filename || storedPortraitFilename || '');
+      if (storedPortraitFilename && slot.portraitFilenameInput) {
+        slot.portraitFilenameInput.value = storedPortraitFilename;
+      }
+      if (slot.enabledInput) {
+        slot.enabledInput.checked = stored.character1_enabled !== '0';
+        updateVisibilityIcon(slot.enabledInput);
+      }
+      if (slot.cacheKeyInput) {
+        slot.cacheKeyInput.value = storedPortraitFilename ? '' : storedCacheKey;
+      }
+      normalizeCharacterSourceState(slot, storedPortraitFilename ? 'portrait' : 'preview');
+      if (slot.scaleInput && stored.scale) {
+        slot.scaleInput.value = stored.scale;
+      }
+      if (slot.xInput && stored.x) {
+        slot.xInput.value = stored.x;
+      }
+      if (slot.yInput && stored.y) {
+        slot.yInput.value = stored.y;
+      }
+    }
+
+    function buildSceneStatePayload() {
+      normalizeCharacterSourceState(character1SlotDef);
+      normalizeCharacterSourceState(character2SlotDef);
+      return {
+        ...buildCharacterState(character1SlotDef),
+        ...buildCharacterState(character2SlotDef),
         canvas_size: canvasPresetSelect?.value || '',
         canvas_preset: canvasPresetSelect?.value || '',
         base_image_name: baseImageNameInput?.value || '',
@@ -603,7 +659,7 @@
     function commitInitialPortraitSelection() {
       if (!initialPortraitFilename) return;
       if (initialPortraitSlot === 2) {
-        lastSelectedCharacter2PortraitFilename = initialPortraitFilename;
+        setLastSelectedPortrait(character2SlotDef, initialPortraitFilename);
         if (character2PortraitFilenameInput) {
           character2PortraitFilenameInput.value = initialPortraitFilename;
         }
@@ -614,13 +670,13 @@
           character2EnabledInput.checked = true;
           updateVisibilityIcon(character2EnabledInput);
         }
-        normalizeCharacter2SourceState('portrait');
+        normalizeCharacterSourceState(character2SlotDef, 'portrait');
         updateCharacterPreviewSelectLabels();
         saveSceneState();
         clearInitialPortraitSeed();
         return;
       }
-      lastSelectedPortraitFilename = initialPortraitFilename;
+      setLastSelectedPortrait(character1SlotDef, initialPortraitFilename);
       if (portraitFilenameInput) {
         portraitFilenameInput.value = initialPortraitFilename;
       }
@@ -631,7 +687,7 @@
         character1EnabledInput.checked = true;
         updateVisibilityIcon(character1EnabledInput);
       }
-      normalizeCharacter1SourceState('portrait');
+      normalizeCharacterSourceState(character1SlotDef, 'portrait');
       updateCharacterPreviewSelectLabels();
       saveSceneState();
       clearInitialPortraitSeed();
@@ -644,60 +700,8 @@
         return;
       }
 
-      const storedPortraitFilename = stored.portrait_filename || '';
-      const storedCacheKey = stored.cache_key || '';
-      const storedCharacter2PortraitFilename = stored.character2_portrait_filename || '';
-      const storedLastCharacter2PortraitFilename = stored.character2_last_selected_portrait_filename
-        || storedCharacter2PortraitFilename
-        || '';
-      const storedCharacter2CacheKey = stored.character2_cache_key || '';
-      lastSelectedPortraitFilename = stored.last_selected_portrait_filename || storedPortraitFilename || '';
-      lastSelectedCharacter2PortraitFilename = storedLastCharacter2PortraitFilename;
-      if (storedPortraitFilename) {
-        if (portraitFilenameInput) {
-          portraitFilenameInput.value = storedPortraitFilename;
-        }
-      }
-      if (character1EnabledInput) {
-        character1EnabledInput.checked = stored.character1_enabled !== '0';
-        updateVisibilityIcon(character1EnabledInput);
-      }
-      if (cacheKeySelect) {
-        cacheKeySelect.value = storedPortraitFilename ? '' : storedCacheKey;
-      }
-      normalizeCharacter1SourceState(storedPortraitFilename ? 'portrait' : 'preview');
-      if (scaleInput && stored.scale) {
-        scaleInput.value = stored.scale;
-      }
-      if (positionXInput && stored.x) {
-        positionXInput.value = stored.x;
-      }
-      if (positionYInput && stored.y) {
-        positionYInput.value = stored.y;
-      }
-      if (character2EnabledInput) {
-        character2EnabledInput.checked = stored.character2_enabled === '1';
-        updateVisibilityIcon(character2EnabledInput);
-      }
-      if (character2CacheKeySelect) {
-        character2CacheKeySelect.value = storedCharacter2PortraitFilename ? '' : storedCharacter2CacheKey;
-        if (storedLastCharacter2PortraitFilename) {
-          character2CacheKeySelect.dataset.portraitFilename = storedLastCharacter2PortraitFilename;
-        }
-      }
-      if (character2PortraitFilenameInput && storedCharacter2PortraitFilename) {
-        character2PortraitFilenameInput.value = storedCharacter2PortraitFilename;
-      }
-      normalizeCharacter2SourceState(storedCharacter2PortraitFilename ? 'portrait' : 'preview');
-      if (character2XInput && stored.character2_x) {
-        character2XInput.value = stored.character2_x;
-      }
-      if (character2YInput && stored.character2_y) {
-        character2YInput.value = stored.character2_y;
-      }
-      if (character2ScaleInput && stored.character2_scale) {
-        character2ScaleInput.value = stored.character2_scale;
-      }
+      applyCharacterState(character1SlotDef, stored);
+      applyCharacterState(character2SlotDef, stored);
       const storedCanvasPreset = stored.canvas_preset || stored.canvas_size || '';
       if (canvasPresetSelect && storedCanvasPreset && canvasPresets[storedCanvasPreset]) {
         canvasPresetSelect.value = storedCanvasPreset;
@@ -815,7 +819,7 @@
         return slot.slot === 1 ? cacheLayoutKey : `character2:${cacheLayoutKey}`;
       }
       const portraitFilename = slot.portraitFilenameInput?.value
-        || (slot.slot === 1 ? lastSelectedPortraitFilename : slot.cacheKeyInput?.dataset.portraitFilename)
+        || (slot.slot === 1 ? getLastSelectedPortrait(slot) : slot.cacheKeyInput?.dataset.portraitFilename)
         || '';
       if (portraitFilename) {
         return slot.slot === 1 ? portraitFilename : `character2:${portraitFilename}`;
@@ -973,14 +977,14 @@
         }
 
         const currentPortraitFilename = slot.portraitFilenameInput?.value || '';
-        if (slot.slot === 1 && lastSelectedPortraitFilename) {
-          slot.cacheKeyInput.dataset.portraitFilename = lastSelectedPortraitFilename;
+        if (slot.slot === 1 && getLastSelectedPortrait(slot)) {
+          slot.cacheKeyInput.dataset.portraitFilename = getLastSelectedPortrait(slot);
         }
         if (currentPortraitFilename) {
           slot.cacheKeyInput.dataset.portraitFilename = currentPortraitFilename;
         }
         const portraitFilename = slot.slot === 1
-          ? (lastSelectedPortraitFilename || currentPortraitFilename)
+          ? (getLastSelectedPortrait(slot) || currentPortraitFilename)
           : (currentPortraitFilename || slot.cacheKeyInput.dataset.portraitFilename || '');
         placeholderOption.textContent = portraitFilename
           ? portraitFilename
@@ -2159,11 +2163,7 @@
     });
 
     function handleCharacterSourceChange(slot) {
-      if (slot.slot === 1) {
-        normalizeCharacter1SourceState(slot.cacheKeyInput?.value ? 'preview' : 'portrait');
-      } else {
-        normalizeCharacter2SourceState(slot.cacheKeyInput?.value ? 'preview' : 'portrait');
-      }
+      normalizeCharacterSourceState(slot, slot.cacheKeyInput?.value ? 'preview' : 'portrait');
       updatePreviewSources();
       renderScenePreviewLayers();
       scheduleScenePreview();
@@ -2178,12 +2178,12 @@
       const selectedCacheKey = slot.cacheKeyInput?.value || '';
       if (selectedCacheKey) {
         const portraitFilename = slot.slot === 1
-          ? (slot.portraitFilenameInput?.value || lastSelectedPortraitFilename)
-          : (slot.portraitFilenameInput?.value || lastSelectedCharacter2PortraitFilename || slot.cacheKeyInput?.dataset.portraitFilename || '');
+          ? (slot.portraitFilenameInput?.value || getLastSelectedPortrait(slot))
+          : (slot.portraitFilenameInput?.value || getLastSelectedPortrait(slot) || slot.cacheKeyInput?.dataset.portraitFilename || '');
         if (slot.slot === 1 && portraitFilename) {
-          lastSelectedPortraitFilename = portraitFilename;
+          setLastSelectedPortrait(slot, portraitFilename);
         } else if (slot.slot === 2 && portraitFilename) {
-          lastSelectedCharacter2PortraitFilename = portraitFilename;
+          setLastSelectedPortrait(slot, portraitFilename);
         }
         if (portraitFilename && slot.cacheKeyInput) {
           slot.cacheKeyInput.dataset.portraitFilename = portraitFilename;
@@ -2193,7 +2193,7 @@
         }
       } else if (slot.portraitFilenameInput && !slot.portraitFilenameInput.value) {
         slot.portraitFilenameInput.value = slot.slot === 1
-          ? lastSelectedPortraitFilename
+          ? getLastSelectedPortrait(slot)
           : (slot.cacheKeyInput?.dataset.portraitFilename || '');
       }
       updateCharacterPreviewSelectLabels();
