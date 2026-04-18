@@ -64,7 +64,7 @@ SCENE_CANVAS_PRESETS = {
     "9:16": (1080, 1920),
 }
 SCENE_PREVIEW_SCALE = 0.5
-DEFAULT_SCENE_LAYER_ORDER = ["base_image", "message_band", "character1", "character2", "overlay_image", "text2", "text1"]
+DEFAULT_SCENE_LAYER_ORDER = ["base_image", "message_band", "character1", "character2", "character3", "overlay_image", "text2", "text1"]
 DEFAULT_SCENE_LAYER_ORDER_MODE = "aviutl"
 
 app = Flask(__name__, template_folder=str(ROOT_DIR / "templates"))
@@ -1448,6 +1448,7 @@ def load_scene_inputs() -> tuple[Image.Image, list[dict], dict, dict, dict, dict
             default_scale=int(request.form.get("scale", "100")),
         ),
         load_scene_character_input("character2"),
+        load_scene_character_input("character3"),
     ]
     active_characters = [character for character in characters if character["enabled"]]
     if not active_characters:
@@ -1584,6 +1585,7 @@ def compose_scene(
         "message_band": lambda: draw_message_band(result, message_band, position_scale),
         "character1": lambda: draw_character_layer(characters_by_layer.get("character1")),
         "character2": lambda: draw_character_layer(characters_by_layer.get("character2")),
+        "character3": lambda: draw_character_layer(characters_by_layer.get("character3")),
         "overlay_image": draw_overlay_layer,
         "text2": lambda: draw_scene_text(result, text2, position_scale),
         "text1": lambda: draw_scene_text(result, text, position_scale),
@@ -1606,7 +1608,8 @@ def service_worker():
 @app.get("/scene")
 def scene_page():
     selected_portrait_filename = (request.args.get("portrait") or "").strip()
-    selected_portrait_slot = 2 if (request.args.get("slot") or "").strip() == "2" else 1
+    selected_portrait_slot_raw = (request.args.get("slot") or "").strip()
+    selected_portrait_slot = int(selected_portrait_slot_raw) if selected_portrait_slot_raw in {"2", "3"} else 1
     selected_portrait_path = resolve_portrait_output_path(selected_portrait_filename)
     if selected_portrait_path is None:
         return render_scene_page()

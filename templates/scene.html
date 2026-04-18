@@ -33,6 +33,7 @@
         <input type="hidden" id="base-image-display-name" value="">
         <input type="hidden" id="portrait-filename" name="portrait_filename" value="{{ selected_portrait_filename or '' }}">
         <input type="hidden" id="character2-portrait-filename" name="character2_portrait_filename" value="">
+        <input type="hidden" id="character3-portrait-filename" name="character3_portrait_filename" value="">
         <input type="hidden" id="layer-order" name="layer_order" value="">
         <input type="hidden" id="layer-order-mode" name="layer_order_mode" value="">
 
@@ -180,6 +181,48 @@
             <div class="field">
               <label for="character2-scale">Scale</label>
               <input id="character2-scale" name="character2_scale" type="number" value="100" min="1">
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <div class="settings-block" data-section-key="character3" data-layer-id="character3">
+          <button type="button" class="settings-block-header" data-settings-toggle="character3" aria-expanded="true">
+            <span class="settings-block-header-main">
+              <h3 class="settings-block-title">キャラ3設定</h3>
+            </span>
+            <span class="settings-block-header-actions">
+              <label class="section-visible-toggle" for="character3-enabled">
+                <input id="character3-enabled" name="character3_enabled" type="checkbox" value="1">
+                <span class="visibility-icon" aria-hidden="true"></span>
+              </label>
+              <span class="settings-block-toggle" aria-hidden="true"></span>
+            </span>
+          </button>
+          <div class="settings-block-body">
+          <div class="field">
+            <label for="character3-cache-key">Preview</label>
+            <select id="character3-cache-key" name="character3_cache_key">
+              <option value="">preview を選択してください</option>
+              {% for source in preview_sources %}
+              <option value="{{ source.cache_key }}" {% if not source.preview_available %}disabled{% endif %}>
+                {{ source.psd_filename }} ({{ source.cache_key }}){% if not source.preview_available %} - preview未生成{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="character3-x">X</label>
+              <input id="character3-x" name="character3_x" type="number" value="0">
+            </div>
+            <div class="field">
+              <label for="character3-y">Y</label>
+              <input id="character3-y" name="character3_y" type="number" value="0">
+            </div>
+            <div class="field">
+              <label for="character3-scale">Scale</label>
+              <input id="character3-scale" name="character3_scale" type="number" value="100" min="1">
             </div>
           </div>
           </div>
@@ -444,6 +487,7 @@
               <div id="message-band-layer" class="preview-message-band-layer is-hidden"></div>
               <img id="portrait-layer" class="preview-layer preview-layer--portrait is-hidden" alt="portrait preview">
               <img id="portrait-layer-2" class="preview-layer preview-layer--portrait is-hidden" alt="portrait preview 2">
+              <img id="portrait-layer-3" class="preview-layer preview-layer--portrait is-hidden" alt="portrait preview 3">
               <img id="bubble-overlay-layer" class="preview-overlay-layer is-hidden" alt="bubble overlay preview">
               <div id="bubble-overlay-resize-handle-right" class="preview-overlay-resize-handle preview-overlay-resize-handle--right" aria-hidden="true"></div>
               <div id="bubble-overlay-resize-handle-bottom" class="preview-overlay-resize-handle preview-overlay-resize-handle--bottom" aria-hidden="true"></div>
