@@ -56,7 +56,16 @@
       {
         slot: 1,
         layerId: 'character1',
-        enabledStateKey: 'character1_enabled',
+        stateKeys: {
+          enabled: 'character1_enabled',
+          cacheKey: 'cache_key',
+          portraitFilename: 'portrait_filename',
+          lastSelectedPortraitFilename: 'last_selected_portrait_filename',
+          x: 'x',
+          y: 'y',
+          scale: 'scale',
+        },
+        layoutKeyPrefix: '',
         enabledInput: document.getElementById('character1-enabled'),
         cacheKeyInput: document.getElementById('cache-key'),
         portraitFilenameInput: document.getElementById('portrait-filename'),
@@ -68,7 +77,16 @@
       {
         slot: 2,
         layerId: 'character2',
-        enabledStateKey: 'character2_enabled',
+        stateKeys: {
+          enabled: 'character2_enabled',
+          cacheKey: 'character2_cache_key',
+          portraitFilename: 'character2_portrait_filename',
+          lastSelectedPortraitFilename: 'character2_last_selected_portrait_filename',
+          x: 'character2_x',
+          y: 'character2_y',
+          scale: 'character2_scale',
+        },
+        layoutKeyPrefix: 'character2:',
         enabledInput: document.getElementById('character2-enabled'),
         cacheKeyInput: document.getElementById('character2-cache-key'),
         portraitFilenameInput: document.getElementById('character2-portrait-filename'),
@@ -171,11 +189,24 @@
     }
 
     function getCharacterEnabledStateKey(slot) {
-      return slot.enabledStateKey;
+      return getCharacterStateKey(slot, 'enabled');
+    }
+
+    function getCharacterStateKey(slot, field) {
+      return slot.stateKeys[field];
     }
 
     function getActivePortraitLayoutKey(slot) {
       return slot.slot === 2 ? activeCharacter2PortraitLayoutKey : activePortraitLayoutKey;
+    }
+
+    function getCharacterLayoutKeyPrefix(slot) {
+      return slot.layoutKeyPrefix || '';
+    }
+
+    function buildCharacterLayoutKey(slot, assetKey) {
+      if (!assetKey) return '';
+      return `${getCharacterLayoutKeyPrefix(slot)}${assetKey}`;
     }
 
     function getCharacterSlotByNumber(slotNumber) {
@@ -537,84 +568,48 @@
     }
 
     function buildCharacterState(slot) {
-      if (slot.slot === 2) {
-        return {
-          character2_enabled: slot.enabledInput?.checked ? '1' : '0',
-          character2_cache_key: slot.cacheKeyInput?.value || '',
-          character2_portrait_filename: slot.portraitFilenameInput?.value || '',
-          character2_last_selected_portrait_filename: getLastSelectedPortrait(slot) || '',
-          character2_x: slot.xInput?.value || '0',
-          character2_y: slot.yInput?.value || '0',
-          character2_scale: slot.scaleInput?.value || '100',
-        };
-      }
       return {
-        character1_enabled: slot.enabledInput?.checked ? '1' : '0',
-        cache_key: slot.cacheKeyInput?.value || '',
-        portrait_filename: slot.portraitFilenameInput?.value || '',
-        last_selected_portrait_filename: getLastSelectedPortrait(slot) || '',
-        scale: slot.scaleInput?.value || '100',
-        x: slot.xInput?.value || '0',
-        y: slot.yInput?.value || '0',
+        [getCharacterStateKey(slot, 'enabled')]: slot.enabledInput?.checked ? '1' : '0',
+        [getCharacterStateKey(slot, 'cacheKey')]: slot.cacheKeyInput?.value || '',
+        [getCharacterStateKey(slot, 'portraitFilename')]: slot.portraitFilenameInput?.value || '',
+        [getCharacterStateKey(slot, 'lastSelectedPortraitFilename')]: getLastSelectedPortrait(slot) || '',
+        [getCharacterStateKey(slot, 'x')]: slot.xInput?.value || '0',
+        [getCharacterStateKey(slot, 'y')]: slot.yInput?.value || '0',
+        [getCharacterStateKey(slot, 'scale')]: slot.scaleInput?.value || '100',
       };
     }
 
     function applyCharacterState(slot, stored) {
-      if (slot.slot === 2) {
-        const storedPortraitFilename = stored.character2_portrait_filename || '';
-        const storedLastPortraitFilename = stored.character2_last_selected_portrait_filename
-          || storedPortraitFilename
-          || '';
-        const storedCacheKey = stored.character2_cache_key || '';
-        setLastSelectedPortrait(slot, storedLastPortraitFilename);
-        if (slot.enabledInput) {
-          slot.enabledInput.checked = stored.character2_enabled === '1';
-          updateVisibilityIcon(slot.enabledInput);
-        }
-        if (slot.cacheKeyInput) {
-          slot.cacheKeyInput.value = storedPortraitFilename ? '' : storedCacheKey;
-          if (storedLastPortraitFilename) {
-            slot.cacheKeyInput.dataset.portraitFilename = storedLastPortraitFilename;
-          }
-        }
-        if (slot.portraitFilenameInput && storedPortraitFilename) {
-          slot.portraitFilenameInput.value = storedPortraitFilename;
-        }
-        normalizeCharacterSourceState(slot, storedPortraitFilename ? 'portrait' : 'preview');
-        if (slot.xInput && stored.character2_x) {
-          slot.xInput.value = stored.character2_x;
-        }
-        if (slot.yInput && stored.character2_y) {
-          slot.yInput.value = stored.character2_y;
-        }
-        if (slot.scaleInput && stored.character2_scale) {
-          slot.scaleInput.value = stored.character2_scale;
-        }
-        return;
-      }
-
-      const storedPortraitFilename = stored.portrait_filename || '';
-      const storedCacheKey = stored.cache_key || '';
-      setLastSelectedPortrait(slot, stored.last_selected_portrait_filename || storedPortraitFilename || '');
-      if (storedPortraitFilename && slot.portraitFilenameInput) {
-        slot.portraitFilenameInput.value = storedPortraitFilename;
-      }
+      const storedPortraitFilename = stored[getCharacterStateKey(slot, 'portraitFilename')] || '';
+      const storedLastPortraitFilename = stored[getCharacterStateKey(slot, 'lastSelectedPortraitFilename')]
+        || storedPortraitFilename
+        || '';
+      const storedCacheKey = stored[getCharacterStateKey(slot, 'cacheKey')] || '';
+      setLastSelectedPortrait(slot, storedLastPortraitFilename);
       if (slot.enabledInput) {
-        slot.enabledInput.checked = stored.character1_enabled !== '0';
+        slot.enabledInput.checked = slot.slot === 2
+          ? stored[getCharacterStateKey(slot, 'enabled')] === '1'
+          : stored[getCharacterStateKey(slot, 'enabled')] !== '0';
         updateVisibilityIcon(slot.enabledInput);
       }
       if (slot.cacheKeyInput) {
         slot.cacheKeyInput.value = storedPortraitFilename ? '' : storedCacheKey;
+        if (slot.slot === 2 && storedLastPortraitFilename) {
+          slot.cacheKeyInput.dataset.portraitFilename = storedLastPortraitFilename;
+        }
+      }
+      if (slot.portraitFilenameInput && storedPortraitFilename) {
+        slot.portraitFilenameInput.value = storedPortraitFilename;
       }
       normalizeCharacterSourceState(slot, storedPortraitFilename ? 'portrait' : 'preview');
-      if (slot.scaleInput && stored.scale) {
-        slot.scaleInput.value = stored.scale;
+      if (slot.xInput && stored[getCharacterStateKey(slot, 'x')]) {
+        slot.xInput.value = stored[getCharacterStateKey(slot, 'x')];
       }
-      if (slot.xInput && stored.x) {
-        slot.xInput.value = stored.x;
+      if (slot.yInput && stored[getCharacterStateKey(slot, 'y')]) {
+        slot.yInput.value = stored[getCharacterStateKey(slot, 'y')];
       }
-      if (slot.yInput && stored.y) {
-        slot.yInput.value = stored.y;
+      if (slot.scaleInput && stored[getCharacterStateKey(slot, 'scale')]) {
+        slot.scaleInput.value = stored[getCharacterStateKey(slot, 'scale')];
       }
     }
 
@@ -828,13 +823,13 @@
       const cacheKey = slot.cacheKeyInput?.value || '';
       if (cacheKey) {
         const cacheLayoutKey = `cache:${cacheKey}`;
-        return slot.slot === 1 ? cacheLayoutKey : `character2:${cacheLayoutKey}`;
+        return buildCharacterLayoutKey(slot, cacheLayoutKey);
       }
       const portraitFilename = slot.portraitFilenameInput?.value
         || (slot.slot === 1 ? getLastSelectedPortrait(slot) : slot.cacheKeyInput?.dataset.portraitFilename)
         || '';
       if (portraitFilename) {
-        return slot.slot === 1 ? portraitFilename : `character2:${portraitFilename}`;
+        return buildCharacterLayoutKey(slot, portraitFilename);
       }
       return '';
     }
