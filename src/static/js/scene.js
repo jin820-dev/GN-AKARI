@@ -5,6 +5,7 @@
 
     // Scene state: initialPortraitFilename is a one-time URL seed; lastSelectedPortraitFilename is kept separately from the active source.
     let initialPortraitFilename = sceneBootstrap.initialPortraitFilename || '';
+    let initialPortraitSlot = sceneBootstrap.initialPortraitSlot === 2 ? 2 : 1;
     let lastSelectedPortraitFilename = '';
     const sceneStorageKey = 'gn_akari_scene_state';
     const portraitLayoutStorageKey = 'gn_akari_scene_portrait_layouts';
@@ -544,13 +545,31 @@
       const sceneUrl = new URL(window.location.href);
       if (sceneUrl.searchParams.has('portrait')) {
         sceneUrl.searchParams.delete('portrait');
+        sceneUrl.searchParams.delete('slot');
         window.history.replaceState({}, '', `${sceneUrl.pathname}${sceneUrl.search}${sceneUrl.hash}`);
       }
       initialPortraitFilename = '';
+      initialPortraitSlot = 1;
     }
 
     function commitInitialPortraitSelection() {
       if (!initialPortraitFilename) return;
+      if (initialPortraitSlot === 2) {
+        if (character2PortraitFilenameInput) {
+          character2PortraitFilenameInput.value = initialPortraitFilename;
+        }
+        if (character2CacheKeySelect) {
+          character2CacheKeySelect.value = '';
+        }
+        if (character2EnabledInput) {
+          character2EnabledInput.checked = true;
+          updateVisibilityIcon(character2EnabledInput);
+        }
+        updateCharacterPreviewSelectLabels();
+        saveSceneState();
+        clearInitialPortraitSeed();
+        return;
+      }
       lastSelectedPortraitFilename = initialPortraitFilename;
       if (portraitFilenameInput) {
         portraitFilenameInput.value = initialPortraitFilename;

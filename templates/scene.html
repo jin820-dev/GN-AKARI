@@ -471,7 +471,8 @@
     window.sceneBootstrap = {
       canvasPresets: {{ canvas_presets | tojson }},
       bubbleOverlayAssets: {{ bubble_overlay_assets | tojson }},
-      initialPortraitFilename: {{ (selected_portrait_filename or '') | tojson }}
+      initialPortraitFilename: {{ (selected_portrait_filename or '') | tojson }},
+      initialPortraitSlot: {{ selected_portrait_slot or 1 }}
     };
   </script>
   <script src="{{ url_for('static', filename='js/scene.js') }}"></script>

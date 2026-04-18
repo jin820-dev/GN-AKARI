@@ -976,6 +976,7 @@ def render_scene_page(
     canvas_presets: dict[str, tuple[int, int]] | None = None,
     selected_portrait_filename: str | None = None,
     selected_portrait_url: str | None = None,
+    selected_portrait_slot: int = 1,
     error_message: str | None = None,
 ):
     return render_template(
@@ -986,6 +987,7 @@ def render_scene_page(
         bubble_overlay_assets=list_registered_bubble_overlay_assets(),
         selected_portrait_filename=selected_portrait_filename,
         selected_portrait_url=selected_portrait_url,
+        selected_portrait_slot=selected_portrait_slot,
         error_message=error_message,
     )
 
@@ -1604,6 +1606,7 @@ def service_worker():
 @app.get("/scene")
 def scene_page():
     selected_portrait_filename = (request.args.get("portrait") or "").strip()
+    selected_portrait_slot = 2 if (request.args.get("slot") or "").strip() == "2" else 1
     selected_portrait_path = resolve_portrait_output_path(selected_portrait_filename)
     if selected_portrait_path is None:
         return render_scene_page()
@@ -1611,6 +1614,7 @@ def scene_page():
     return render_scene_page(
         selected_portrait_filename=selected_portrait_path.name,
         selected_portrait_url=f"/outputs/{selected_portrait_path.relative_to(OUTPUTS_DIR)}",
+        selected_portrait_slot=selected_portrait_slot,
     )
 
 

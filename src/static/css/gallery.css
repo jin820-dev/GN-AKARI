@@ -127,6 +127,8 @@ h2 {
   border: 1px solid var(--akari-border);
   background: #fffdfa;
   color: var(--text-main);
+  font-size: 16px;
+  line-height: 1;
   box-shadow: 0 3px 10px rgba(230, 145, 56, 0.12);
 }
 .gallery-action-button:hover {

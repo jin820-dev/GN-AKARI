@@ -18,9 +18,10 @@ function updateEmptyState(kind) {
   galleryEmpty.style.display = hasItems ? 'none' : 'block';
 }
 
-function usePortrait(filename) {
+function usePortrait(filename, slot = 1) {
   if (!filename) return;
-  window.location.href = "/scene?portrait=" + encodeURIComponent(filename);
+  const slotParam = slot === 2 ? '&slot=2' : '';
+  window.location.href = "/scene?portrait=" + encodeURIComponent(filename) + slotParam;
 }
 
 async function deleteGalleryImage(kind, filename) {

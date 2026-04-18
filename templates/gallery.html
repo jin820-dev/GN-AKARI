@@ -40,15 +40,18 @@
             type="button"
             class="gallery-action-button"
             data-filename="{{ item.filename }}"
-            title="使う"
-            aria-label="使う"
-            onclick="usePortrait(this.dataset.filename)"
-          >
-            <svg class="gallery-action-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 12h14"></path>
-              <path d="m13 6 6 6-6 6"></path>
-            </svg>
-          </button>
+            title="キャラ1で使う"
+            aria-label="キャラ1で使う"
+            onclick="usePortrait(this.dataset.filename, 1)"
+          >①</button>
+          <button
+            type="button"
+            class="gallery-action-button"
+            data-filename="{{ item.filename }}"
+            title="キャラ2で使う"
+            aria-label="キャラ2で使う"
+            onclick="usePortrait(this.dataset.filename, 2)"
+          >②</button>
           <button
             type="button"
             class="gallery-action-button gallery-action-button--delete"
