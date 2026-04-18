@@ -308,6 +308,24 @@
       updateLayerOrderInput();
     }
 
+    function moveLayerOrder(layerId, direction) {
+      currentLayerOrder = normalizeLayerOrder(currentLayerOrder);
+      const currentIndex = currentLayerOrder.indexOf(layerId);
+      if (currentIndex < 0) return;
+      const offset = currentLayerOrderMode === 'after_effects'
+        ? (direction === 'front' ? -1 : 1)
+        : (direction === 'front' ? 1 : -1);
+      const nextIndex = currentIndex + offset;
+      if (nextIndex < 0 || nextIndex >= currentLayerOrder.length) return;
+
+      [currentLayerOrder[currentIndex], currentLayerOrder[nextIndex]] =
+        [currentLayerOrder[nextIndex], currentLayerOrder[currentIndex]];
+      updateLayerOrderInput();
+      applyLayerOrderToSettingsBlocks();
+      applyLayerOrderToPreviewDom();
+      saveSceneState();
+    }
+
     function getPreviewLayerNodes(layerId) {
       const layerMap = {
         base_image: [baseLayer],
@@ -1635,6 +1653,78 @@
       });
     }
 
+    function initializeLayerMoveControls() {
+      if (!sceneForm) return;
+      sceneForm.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
+        const actions = block.querySelector('.settings-block-header-actions');
+        if (!actions || actions.querySelector('[data-layer-move]')) return;
+
+        const backButton = document.createElement('span');
+        backButton.className = 'layer-drag-handle layer-move-control';
+        backButton.setAttribute('role', 'button');
+        backButton.tabIndex = 0;
+        backButton.title = '背面へ';
+        backButton.dataset.layerMove = 'back';
+        backButton.textContent = '↓';
+
+        const frontButton = document.createElement('span');
+        frontButton.className = 'layer-drag-handle layer-move-control';
+        frontButton.setAttribute('role', 'button');
+        frontButton.tabIndex = 0;
+        frontButton.title = '前面へ';
+        frontButton.dataset.layerMove = 'front';
+        frontButton.textContent = '↑';
+
+        const collapseToggle = actions.querySelector('.settings-block-toggle');
+        actions.insertBefore(backButton, collapseToggle || actions.firstChild);
+        actions.insertBefore(frontButton, collapseToggle || actions.firstChild);
+      });
+
+      sceneForm.addEventListener('click', (event) => {
+        const control = event.target.closest('[data-layer-move]');
+        if (!control || !sceneForm.contains(control)) return;
+        const block = control.closest('.settings-block[data-layer-id]');
+        const direction = control.dataset.layerMove;
+        if (!block?.dataset.layerId || !direction) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        moveLayerOrder(block.dataset.layerId, direction);
+      }, true);
+
+      sceneForm.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const control = event.target.closest('[data-layer-move]');
+        if (!control || !sceneForm.contains(control)) return;
+        const block = control.closest('.settings-block[data-layer-id]');
+        const direction = control.dataset.layerMove;
+        if (!block?.dataset.layerId || !direction) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        moveLayerOrder(block.dataset.layerId, direction);
+      }, true);
+    }
+
+    function initializeLayerHeaderLabels() {
+      const labels = {
+        base_image: 'ベース画像',
+        character1: 'キャラ1',
+        character2: 'キャラ2',
+        text1: 'テキスト1',
+        text2: 'テキスト2',
+        message_band: 'メッセージ帯',
+        overlay_image: '画像オーバーレイ',
+      };
+      sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
+        const label = labels[block.dataset.layerId];
+        const title = block.querySelector('.settings-block-title');
+        if (label && title) {
+          title.textContent = label;
+        }
+      });
+    }
+
     function initializeLayerLockControls() {
       if (!sceneForm) return;
       sceneForm.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
@@ -2102,6 +2192,8 @@
       currentLayerOrderMode = loadLayerOrderMode();
       currentLayerLocks = normalizeLayerLocks(currentLayerLocks);
       initializeLayerOrderDrag();
+      initializeLayerMoveControls();
+      initializeLayerHeaderLabels();
       initializeLayerLockControls();
       updateVisibilityIcons();
       updateLayerOrderInput();
