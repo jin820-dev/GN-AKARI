@@ -729,6 +729,17 @@
       }
     }
 
+    function getCharacter1PortraitLayoutKey() {
+      const cacheKey = cacheKeySelect?.value || '';
+      if (cacheKey) {
+        return `cache:${cacheKey}`;
+      }
+      if (portraitFilenameInput?.value) {
+        return portraitFilenameInput.value;
+      }
+      return lastSelectedPortraitFilename || '';
+    }
+
     function loadSceneUiState() {
       try {
         const raw = localStorage.getItem(sceneUiStateStorageKey);
@@ -779,12 +790,11 @@
       });
     }
 
-    function savePortraitLayoutState() {
-      const portraitFilename = portraitFilenameInput?.value || '';
-      if (!portraitFilename) return;
+    function savePortraitLayoutState(layoutKey = getCharacter1PortraitLayoutKey()) {
+      if (!layoutKey) return;
 
       const layouts = loadPortraitLayoutState();
-      layouts[portraitFilename] = {
+      layouts[layoutKey] = {
         x: positionXInput?.value || '0',
         y: positionYInput?.value || '0',
         scale: scaleInput?.value || '100',
@@ -797,7 +807,7 @@
     }
 
     function applyPortraitLayoutState() {
-      const portraitFilename = portraitFilenameInput?.value || '';
+      const portraitFilename = getCharacter1PortraitLayoutKey();
       if (!portraitFilename) {
         activePortraitLayoutKey = '';
         return;
@@ -2045,6 +2055,9 @@
     }
 
     function handleCharacterPreviewSelectChange(slot) {
+      if (slot.slot === 1) {
+        savePortraitLayoutState(activePortraitLayoutKey);
+      }
       const selectedCacheKey = slot.cacheKeyInput?.value || '';
       if (selectedCacheKey) {
         const portraitFilename = slot.slot === 1
