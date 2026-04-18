@@ -168,6 +168,26 @@
       }
     }
 
+    function getCharacterEnabledStateKey(slot) {
+      return slot.slot === 2 ? 'character2_enabled' : 'character1_enabled';
+    }
+
+    function getActivePortraitLayoutKey(slot) {
+      return slot.slot === 2 ? activeCharacter2PortraitLayoutKey : activePortraitLayoutKey;
+    }
+
+    function getPortraitFilenameBeforePreviewSelection(slot) {
+      return slot.portraitFilenameInput?.value
+        || getLastSelectedPortrait(slot)
+        || (slot.slot === 2 ? slot.cacheKeyInput?.dataset.portraitFilename || '' : '');
+    }
+
+    function getPortraitFilenameAfterPreviewClear(slot) {
+      return slot.slot === 1
+        ? getLastSelectedPortrait(slot)
+        : (slot.cacheKeyInput?.dataset.portraitFilename || '');
+    }
+
     const textSettingSlots = [
       {
         key: 'text',
@@ -1265,8 +1285,9 @@
     }
 
     function appendCharacterState(formData) {
-      formData.set('character1_enabled', character1EnabledInput?.checked ? '1' : '0');
-      formData.set('character2_enabled', character2EnabledInput?.checked ? '1' : '0');
+      characterSlots.forEach((slot) => {
+        formData.set(getCharacterEnabledStateKey(slot), slot.enabledInput?.checked ? '1' : '0');
+      });
     }
 
     async function uploadSceneBaseImage(file) {
@@ -2170,19 +2191,11 @@
     }
 
     function handleCharacterPreviewSelectChange(slot) {
-      if (slot.slot === 1) {
-        savePortraitLayoutState(activePortraitLayoutKey);
-      } else {
-        savePortraitLayoutState(activeCharacter2PortraitLayoutKey, slot);
-      }
+      savePortraitLayoutState(getActivePortraitLayoutKey(slot), slot);
       const selectedCacheKey = slot.cacheKeyInput?.value || '';
       if (selectedCacheKey) {
-        const portraitFilename = slot.slot === 1
-          ? (slot.portraitFilenameInput?.value || getLastSelectedPortrait(slot))
-          : (slot.portraitFilenameInput?.value || getLastSelectedPortrait(slot) || slot.cacheKeyInput?.dataset.portraitFilename || '');
-        if (slot.slot === 1 && portraitFilename) {
-          setLastSelectedPortrait(slot, portraitFilename);
-        } else if (slot.slot === 2 && portraitFilename) {
+        const portraitFilename = getPortraitFilenameBeforePreviewSelection(slot);
+        if (portraitFilename) {
           setLastSelectedPortrait(slot, portraitFilename);
         }
         if (portraitFilename && slot.cacheKeyInput) {
@@ -2192,9 +2205,7 @@
           slot.portraitFilenameInput.value = '';
         }
       } else if (slot.portraitFilenameInput && !slot.portraitFilenameInput.value) {
-        slot.portraitFilenameInput.value = slot.slot === 1
-          ? getLastSelectedPortrait(slot)
-          : (slot.cacheKeyInput?.dataset.portraitFilename || '');
+        slot.portraitFilenameInput.value = getPortraitFilenameAfterPreviewClear(slot);
       }
       updateCharacterPreviewSelectLabels();
       handleCharacterSourceChange(slot);
