@@ -7,6 +7,7 @@
     let initialPortraitFilename = sceneBootstrap.initialPortraitFilename || '';
     let initialPortraitSlot = sceneBootstrap.initialPortraitSlot === 2 ? 2 : 1;
     let lastSelectedPortraitFilename = '';
+    let lastSelectedCharacter2PortraitFilename = '';
     const sceneStorageKey = 'gn_akari_scene_state';
     const portraitLayoutStorageKey = 'gn_akari_scene_portrait_layouts';
     const sceneUiStateStorageKey = 'gn_akari_scene_ui_state';
@@ -108,6 +109,7 @@
     let restoredBaseImageUrl = '';
     let indexedDbBaseImageBlob = null;
     let activePortraitLayoutKey = '';
+    let activeCharacter2PortraitLayoutKey = '';
     let sceneBaseImageDbPromise = null;
     let latestPreviewLayout = null;
     let lastBubbleOverlayAssetValue = bubbleOverlayAssetInput?.value || '';
@@ -478,8 +480,53 @@
       return '';
     }
 
+    function normalizeCharacter2SourceState(preferredSource = '') {
+      const portraitFilename = character2PortraitFilenameInput?.value || '';
+      const cacheKey = character2CacheKeySelect?.value || '';
+      const storedPortraitFilename = character2CacheKeySelect?.dataset.portraitFilename
+        || lastSelectedCharacter2PortraitFilename
+        || '';
+
+      if (preferredSource === 'preview' && cacheKey) {
+        if (character2PortraitFilenameInput) {
+          character2PortraitFilenameInput.value = '';
+        }
+        return 'preview';
+      }
+
+      if (portraitFilename) {
+        lastSelectedCharacter2PortraitFilename = portraitFilename;
+        if (character2CacheKeySelect) {
+          character2CacheKeySelect.value = '';
+          character2CacheKeySelect.dataset.portraitFilename = lastSelectedCharacter2PortraitFilename;
+        }
+        return 'portrait';
+      }
+
+      if (cacheKey) {
+        if (character2PortraitFilenameInput) {
+          character2PortraitFilenameInput.value = '';
+        }
+        return 'preview';
+      }
+
+      if (storedPortraitFilename) {
+        lastSelectedCharacter2PortraitFilename = storedPortraitFilename;
+        if (character2CacheKeySelect) {
+          character2CacheKeySelect.dataset.portraitFilename = lastSelectedCharacter2PortraitFilename;
+        }
+        if (character2PortraitFilenameInput) {
+          character2PortraitFilenameInput.value = lastSelectedCharacter2PortraitFilename;
+        }
+        return 'portrait';
+      }
+
+      return '';
+    }
+
     function buildSceneStatePayload() {
       normalizeCharacter1SourceState();
+      normalizeCharacter2SourceState();
       return {
         character1_enabled: character1EnabledInput?.checked ? '1' : '0',
         cache_key: cacheKeySelect?.value || '',
@@ -491,6 +538,7 @@
         character2_enabled: character2EnabledInput?.checked ? '1' : '0',
         character2_cache_key: character2CacheKeySelect?.value || '',
         character2_portrait_filename: character2PortraitFilenameInput?.value || '',
+        character2_last_selected_portrait_filename: lastSelectedCharacter2PortraitFilename || '',
         character2_x: character2XInput?.value || '0',
         character2_y: character2YInput?.value || '0',
         character2_scale: character2ScaleInput?.value || '100',
@@ -555,6 +603,7 @@
     function commitInitialPortraitSelection() {
       if (!initialPortraitFilename) return;
       if (initialPortraitSlot === 2) {
+        lastSelectedCharacter2PortraitFilename = initialPortraitFilename;
         if (character2PortraitFilenameInput) {
           character2PortraitFilenameInput.value = initialPortraitFilename;
         }
@@ -565,6 +614,7 @@
           character2EnabledInput.checked = true;
           updateVisibilityIcon(character2EnabledInput);
         }
+        normalizeCharacter2SourceState('portrait');
         updateCharacterPreviewSelectLabels();
         saveSceneState();
         clearInitialPortraitSeed();
@@ -596,7 +646,13 @@
 
       const storedPortraitFilename = stored.portrait_filename || '';
       const storedCacheKey = stored.cache_key || '';
+      const storedCharacter2PortraitFilename = stored.character2_portrait_filename || '';
+      const storedLastCharacter2PortraitFilename = stored.character2_last_selected_portrait_filename
+        || storedCharacter2PortraitFilename
+        || '';
+      const storedCharacter2CacheKey = stored.character2_cache_key || '';
       lastSelectedPortraitFilename = stored.last_selected_portrait_filename || storedPortraitFilename || '';
+      lastSelectedCharacter2PortraitFilename = storedLastCharacter2PortraitFilename;
       if (storedPortraitFilename) {
         if (portraitFilenameInput) {
           portraitFilenameInput.value = storedPortraitFilename;
@@ -623,12 +679,16 @@
         character2EnabledInput.checked = stored.character2_enabled === '1';
         updateVisibilityIcon(character2EnabledInput);
       }
-      if (character2CacheKeySelect && stored.character2_cache_key) {
-        character2CacheKeySelect.value = stored.character2_cache_key;
+      if (character2CacheKeySelect) {
+        character2CacheKeySelect.value = storedCharacter2PortraitFilename ? '' : storedCharacter2CacheKey;
+        if (storedLastCharacter2PortraitFilename) {
+          character2CacheKeySelect.dataset.portraitFilename = storedLastCharacter2PortraitFilename;
+        }
       }
-      if (character2PortraitFilenameInput && stored.character2_portrait_filename) {
-        character2PortraitFilenameInput.value = stored.character2_portrait_filename;
+      if (character2PortraitFilenameInput && storedCharacter2PortraitFilename) {
+        character2PortraitFilenameInput.value = storedCharacter2PortraitFilename;
       }
+      normalizeCharacter2SourceState(storedCharacter2PortraitFilename ? 'portrait' : 'preview');
       if (character2XInput && stored.character2_x) {
         character2XInput.value = stored.character2_x;
       }
@@ -748,15 +808,23 @@
       }
     }
 
-    function getCharacter1PortraitLayoutKey() {
-      const cacheKey = cacheKeySelect?.value || '';
+    function getCharacterPortraitLayoutKey(slot) {
+      const cacheKey = slot.cacheKeyInput?.value || '';
       if (cacheKey) {
-        return `cache:${cacheKey}`;
+        const cacheLayoutKey = `cache:${cacheKey}`;
+        return slot.slot === 1 ? cacheLayoutKey : `character2:${cacheLayoutKey}`;
       }
-      if (portraitFilenameInput?.value) {
-        return portraitFilenameInput.value;
+      const portraitFilename = slot.portraitFilenameInput?.value
+        || (slot.slot === 1 ? lastSelectedPortraitFilename : slot.cacheKeyInput?.dataset.portraitFilename)
+        || '';
+      if (portraitFilename) {
+        return slot.slot === 1 ? portraitFilename : `character2:${portraitFilename}`;
       }
-      return lastSelectedPortraitFilename || '';
+      return '';
+    }
+
+    function getCharacter1PortraitLayoutKey() {
+      return getCharacterPortraitLayoutKey(characterSlots[0]);
     }
 
     function loadSceneUiState() {
@@ -809,14 +877,14 @@
       });
     }
 
-    function savePortraitLayoutState(layoutKey = getCharacter1PortraitLayoutKey()) {
+    function savePortraitLayoutState(layoutKey = getCharacter1PortraitLayoutKey(), slot = characterSlots[0]) {
       if (!layoutKey) return;
 
       const layouts = loadPortraitLayoutState();
       layouts[layoutKey] = {
-        x: positionXInput?.value || '0',
-        y: positionYInput?.value || '0',
-        scale: scaleInput?.value || '100',
+        x: slot.xInput?.value || '0',
+        y: slot.yInput?.value || '0',
+        scale: slot.scaleInput?.value || '100',
       };
       try {
         localStorage.setItem(portraitLayoutStorageKey, JSON.stringify(layouts));
@@ -825,28 +893,41 @@
       }
     }
 
-    function applyPortraitLayoutState() {
-      const portraitFilename = getCharacter1PortraitLayoutKey();
+    function applyPortraitLayoutStateForSlot(slot) {
+      const portraitFilename = getCharacterPortraitLayoutKey(slot);
+      const activeKey = slot.slot === 1 ? activePortraitLayoutKey : activeCharacter2PortraitLayoutKey;
       if (!portraitFilename) {
-        activePortraitLayoutKey = '';
+        if (slot.slot === 1) {
+          activePortraitLayoutKey = '';
+        } else {
+          activeCharacter2PortraitLayoutKey = '';
+        }
         return;
       }
-      if (activePortraitLayoutKey === portraitFilename) {
+      if (activeKey === portraitFilename) {
         return;
       }
 
       const layouts = loadPortraitLayoutState();
       const layout = layouts[portraitFilename];
-      if (positionXInput) {
-        positionXInput.value = layout?.x || '0';
+      if (slot.xInput) {
+        slot.xInput.value = layout?.x || '0';
       }
-      if (positionYInput) {
-        positionYInput.value = layout?.y || '0';
+      if (slot.yInput) {
+        slot.yInput.value = layout?.y || '0';
       }
-      if (scaleInput) {
-        scaleInput.value = layout?.scale || '100';
+      if (slot.scaleInput) {
+        slot.scaleInput.value = layout?.scale || '100';
       }
-      activePortraitLayoutKey = portraitFilename;
+      if (slot.slot === 1) {
+        activePortraitLayoutKey = portraitFilename;
+      } else {
+        activeCharacter2PortraitLayoutKey = portraitFilename;
+      }
+    }
+
+    function applyPortraitLayoutState() {
+      characterSlots.forEach(applyPortraitLayoutStateForSlot);
     }
 
     function getServerBaseImageUrl() {
@@ -1850,11 +1931,20 @@
       await runScenePreview(requestId);
     }
 
-    function applyImmediatePreviewUpdate({ savePortrait = true } = {}) {
+    function getCharacterSlotForLayoutInput(element) {
+      return characterSlots.find((slot) => (
+        element === slot.xInput || element === slot.yInput || element === slot.scaleInput
+      )) || null;
+    }
+
+    function applyImmediatePreviewUpdate({ savePortrait = true, portraitSlot = characterSlots[0] } = {}) {
       syncImmediatePreviewLayoutFromInputs();
       renderScenePreviewLayers();
       if (savePortrait) {
-        savePortraitLayoutState();
+        const layoutKey = portraitSlot.slot === 1
+          ? getCharacter1PortraitLayoutKey()
+          : getCharacterPortraitLayoutKey(portraitSlot);
+        savePortraitLayoutState(layoutKey, portraitSlot);
       }
       saveSceneState();
     }
@@ -1980,10 +2070,14 @@
     ];
     immediatePreviewInputs.forEach((element) => {
       element?.addEventListener('change', () => {
+        const portraitSlot = getCharacterSlotForLayoutInput(element);
+        if (portraitSlot) {
+          savePortraitLayoutState(getCharacterPortraitLayoutKey(portraitSlot), portraitSlot);
+        }
         requestCommittedPreviewUpdate({ server: false });
       });
       element?.addEventListener('input', () => {
-        applyImmediatePreviewUpdate();
+        applyImmediatePreviewUpdate({ portraitSlot: getCharacterSlotForLayoutInput(element) || characterSlots[0] });
       });
     });
     committedPreviewInputs.forEach((element) => {
@@ -2067,6 +2161,8 @@
     function handleCharacterSourceChange(slot) {
       if (slot.slot === 1) {
         normalizeCharacter1SourceState(slot.cacheKeyInput?.value ? 'preview' : 'portrait');
+      } else {
+        normalizeCharacter2SourceState(slot.cacheKeyInput?.value ? 'preview' : 'portrait');
       }
       updatePreviewSources();
       renderScenePreviewLayers();
@@ -2076,14 +2172,18 @@
     function handleCharacterPreviewSelectChange(slot) {
       if (slot.slot === 1) {
         savePortraitLayoutState(activePortraitLayoutKey);
+      } else {
+        savePortraitLayoutState(activeCharacter2PortraitLayoutKey, slot);
       }
       const selectedCacheKey = slot.cacheKeyInput?.value || '';
       if (selectedCacheKey) {
         const portraitFilename = slot.slot === 1
           ? (slot.portraitFilenameInput?.value || lastSelectedPortraitFilename)
-          : (slot.portraitFilenameInput?.value || slot.cacheKeyInput?.dataset.portraitFilename || '');
+          : (slot.portraitFilenameInput?.value || lastSelectedCharacter2PortraitFilename || slot.cacheKeyInput?.dataset.portraitFilename || '');
         if (slot.slot === 1 && portraitFilename) {
           lastSelectedPortraitFilename = portraitFilename;
+        } else if (slot.slot === 2 && portraitFilename) {
+          lastSelectedCharacter2PortraitFilename = portraitFilename;
         }
         if (portraitFilename && slot.cacheKeyInput) {
           slot.cacheKeyInput.dataset.portraitFilename = portraitFilename;
@@ -2189,7 +2289,7 @@
     characterSlots.forEach((slot) => {
       slot.onCommit = slot.slot === 1
         ? () => savePortraitLayoutState()
-        : () => {};
+        : () => savePortraitLayoutState(getCharacterPortraitLayoutKey(slot), slot);
       slot.syncPreviewLayoutPosition = () => {};
       slot.layer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(slot, event));
       slot.layer?.addEventListener('pointermove', updatePreviewObjectDrag);
