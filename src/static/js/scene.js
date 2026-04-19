@@ -346,6 +346,7 @@
     let previewObjectDragState = null;
     let overlayResizeState = null;
     let layerOrderDraggingBlock = null;
+    let activeLayerId = '';
     let baseObjectUrl = null;
     let baseObjectUrlFile = null;
     let currentBasePreviewSourceKey = '';
@@ -913,6 +914,47 @@
       return sceneForm?.querySelector(`.settings-block[data-layer-id="${layerId}"]`) || null;
     }
 
+    function getPreviewDragTarget(layerId) {
+      if (!layerId) return null;
+      const characterSlot = characterSlots.find((slot) => slot.layerId === layerId);
+      if (characterSlot) return characterSlot;
+      const textSlot = textSettingSlots.find((slot) => slot.layerId === layerId);
+      if (textSlot) return textSlot.dragTarget || null;
+      if (layerId === 'overlay_image') return overlayDragTarget;
+      return null;
+    }
+
+    function isPointerInsideLayer(layer, event) {
+      if (!layer || layer.classList.contains('is-hidden')) return false;
+      const rect = layer.getBoundingClientRect();
+      return rect.width > 0
+        && rect.height > 0
+        && event.clientX >= rect.left
+        && event.clientX <= rect.right
+        && event.clientY >= rect.top
+        && event.clientY <= rect.bottom;
+    }
+
+    function updateActiveLayerDisplay() {
+      sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
+        block.classList.toggle('is-selected-layer', block.dataset.layerId === activeLayerId);
+      });
+      defaultLayerOrder.forEach((layerId) => {
+        getPreviewLayerNodes(layerId).forEach((node) => {
+          node.classList.toggle('is-selected-layer', layerId === activeLayerId);
+        });
+      });
+    }
+
+    function setActiveLayer(layerId) {
+      if (!layerId || activeLayerId === layerId) {
+        if (layerId) updateActiveLayerDisplay();
+        return;
+      }
+      activeLayerId = layerId;
+      updateActiveLayerDisplay();
+    }
+
     function applyLayerOrderToSettingsBlocks() {
       if (!sceneForm) return;
       const listEnd = sceneLayerListEnd || sceneForm.querySelector('button[type="submit"]');
@@ -922,6 +964,7 @@
           sceneForm.insertBefore(block, listEnd);
         }
       });
+      updateActiveLayerDisplay();
     }
 
     function updateLayerOrderFromSettingsBlocks() {
@@ -982,6 +1025,7 @@
           node.classList.toggle('is-position-locked', locked);
         });
       });
+      updateActiveLayerDisplay();
     }
 
     function updateVisibilityIcon(input) {
@@ -1008,6 +1052,7 @@
         });
       });
       updateLayerLockControls();
+      updateActiveLayerDisplay();
     }
 
     function buildTextState(slot) {
@@ -2244,6 +2289,7 @@
       if (event.button !== undefined && event.button !== 0) return;
       if (blockLockedPointer(target.layerId, event)) return;
       if (target.layer.classList.contains('is-hidden')) return;
+      setActiveLayer(target.layerId);
 
       const scale = getPreviewScale();
       previewObjectDragState = {
@@ -2263,6 +2309,14 @@
       target.layer.setPointerCapture(event.pointerId);
       event.stopPropagation();
       event.preventDefault();
+    }
+
+    function beginSelectedPreviewObjectDrag(event) {
+      if (event.target.closest('.preview-overlay-resize-handle')) return;
+      const target = getPreviewDragTarget(activeLayerId);
+      if (!target?.layer || target.layer.contains(event.target)) return;
+      if (!isPointerInsideLayer(target.layer, event)) return;
+      beginPreviewObjectDrag(target, event);
     }
 
     function updatePreviewObjectDrag(event) {
@@ -2889,8 +2943,8 @@
           applyImmediateTextInputUpdate(slot.fontInput);
         }
       });
-      const dragSlot = buildTextDragSlot(slot.key, slot.layerId, slot.xInput, slot.yInput, slot.layer);
-      slot.layer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(dragSlot, event));
+      slot.dragTarget = buildTextDragSlot(slot.key, slot.layerId, slot.xInput, slot.yInput, slot.layer);
+      slot.layer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(slot.dragTarget, event));
       slot.layer?.addEventListener('pointermove', updatePreviewObjectDrag);
       slot.layer?.addEventListener('pointerup', endPreviewObjectDrag);
       slot.layer?.addEventListener('pointercancel', endPreviewObjectDrag);
@@ -2946,6 +3000,9 @@
       currentLayerOrder = currentLayerOrder.filter((id) => id !== layerId);
       delete currentLayerLocks[layerId];
       delete defaultSectionOpenState[layerId];
+      if (activeLayerId === layerId) {
+        activeLayerId = characterSlots[characterSlots.length - 1]?.layerId || '';
+      }
 
       updateLayerOrderInput();
       updateLayerLockControls();
@@ -3009,6 +3066,9 @@
       if (latestPreviewLayout) {
         delete latestPreviewLayout[slot.key];
       }
+      if (activeLayerId === layerId) {
+        activeLayerId = textSettingSlots[textSettingSlots.length - 1]?.layerId || '';
+      }
 
       updateLayerOrderInput();
       updateLayerLockControls();
@@ -3056,6 +3116,12 @@
     removeCharacterSlotButton?.addEventListener('click', () => removeLastCharacterSlot());
     addTextSlotButton?.addEventListener('click', () => addTextSlot());
     removeTextSlotButton?.addEventListener('click', () => removeLastTextSlot());
+    sceneForm?.addEventListener('pointerdown', (event) => {
+      const block = event.target.closest('.settings-block[data-layer-id]');
+      if (!block || !sceneForm.contains(block)) return;
+      setActiveLayer(block.dataset.layerId);
+    });
+    previewCanvas?.addEventListener('pointerdown', beginSelectedPreviewObjectDrag, { capture: true });
     baseLayer?.addEventListener('load', renderScenePreviewLayers);
     bubbleOverlayLayer?.addEventListener('load', renderScenePreviewLayers);
     window.addEventListener('resize', renderScenePreviewLayers);
