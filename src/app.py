@@ -1553,7 +1553,7 @@ def build_message_band_layout(message_band: dict, position_scale: float) -> dict
     }
 
 
-def normalize_scene_layer_order(raw_order) -> list[str]:
+def normalize_scene_layer_order(raw_order, extra_layer_ids: list[str] | None = None) -> list[str]:
     if isinstance(raw_order, str):
         try:
             parsed_order = json.loads(raw_order)
@@ -1575,6 +1575,13 @@ def normalize_scene_layer_order(raw_order) -> list[str]:
     for layer_id in DEFAULT_SCENE_LAYER_ORDER:
         if layer_id not in normalized:
             normalized.append(layer_id)
+    for layer_id in extra_layer_ids or []:
+        layer_id = str(layer_id)
+        if (
+            SCENE_CHARACTER_LAYER_RE.match(layer_id)
+            or SCENE_TEXT_LAYER_RE.match(layer_id)
+        ) and layer_id not in normalized:
+            normalized.append(layer_id)
     return normalized
 
 
@@ -1586,8 +1593,8 @@ def resolve_scene_layer_draw_order(layer_order, layer_order_mode: str) -> list[s
     return normalize_scene_layer_order(layer_order)
 
 
-def load_scene_layer_order() -> list[str]:
-    return normalize_scene_layer_order(request.form.get("layer_order") or "")
+def load_scene_layer_order(extra_layer_ids: list[str] | None = None) -> list[str]:
+    return normalize_scene_layer_order(request.form.get("layer_order") or "", extra_layer_ids=extra_layer_ids)
 
 
 def load_scene_layer_order_mode() -> str:
@@ -1687,7 +1694,7 @@ def load_scene_inputs() -> tuple[Image.Image, list[dict], list[dict], dict, dict
     texts = load_scene_text_inputs()
     message_band = load_message_band_input()
     bubble_overlay = load_scene_bubble_overlay_input()
-    layer_order = load_scene_layer_order()
+    layer_order = load_scene_layer_order(extra_layer_ids=[text["layer_id"] for text in texts])
     layer_order_mode = load_scene_layer_order_mode()
     preview_stem = "scene"
     return base, active_characters, texts, message_band, bubble_overlay, layer_order, layer_order_mode, preview_stem, canvas_preset, base_fit_mode, base_scale, base_x, base_y
@@ -1814,7 +1821,9 @@ def compose_scene(
         "message_band": lambda: draw_message_band(result, message_band, position_scale),
         "overlay_image": draw_overlay_layer,
     }
-    for layer_id in resolve_scene_layer_draw_order(layer_order, layer_order_mode):
+    # Dynamic text slots may exist even when a legacy or damaged POST omits them from layer_order.
+    draw_order = normalize_scene_layer_order(layer_order, extra_layer_ids=list(texts_by_layer.keys()))
+    for layer_id in resolve_scene_layer_draw_order(draw_order, layer_order_mode):
         if SCENE_CHARACTER_LAYER_RE.match(layer_id):
             draw_character_layer(characters_by_layer.get(layer_id))
             continue

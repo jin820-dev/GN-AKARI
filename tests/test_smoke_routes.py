@@ -154,6 +154,42 @@ class SmokeRouteTest(unittest.TestCase):
         finally:
             response.close()
 
+    def test_scene_preview_completes_missing_dynamic_text_layer_order(self) -> None:
+        base_path = appmod.SCENE_BASE_OUTPUTS_DIR / "base.png"
+        portrait_path = appmod.PORTRAIT_OUTPUTS_DIR / "A.png"
+        Image.new("RGBA", (64, 64), (255, 255, 255, 255)).save(base_path)
+        Image.new("RGBA", (16, 16), (255, 0, 0, 255)).save(portrait_path)
+
+        response = self.client.post(
+            "/api/scene_preview",
+            data={
+                "base_image_name": "base.png",
+                "canvas_preset": "16:9",
+                "base_fit_mode": "contain",
+                "character_slot_count": "1",
+                "character1_enabled": "1",
+                "portrait_filename": "A.png",
+                "text_slot_count": "3",
+                "text3_enabled": "1",
+                "text3_value": "third",
+                "text3_x": "10",
+                "text3_y": "20",
+                "text3_size": "32",
+                "text3_color": "#000000",
+                "text3_stroke_color": "#000000",
+                "text3_stroke_width": "0",
+                "layer_order": json.dumps(["base_image", "character1"]),
+            },
+        )
+
+        try:
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            self.assertIn("text3", payload["layout"]["layer_order"])
+        finally:
+            response.close()
+
 
 if __name__ == "__main__":
     unittest.main()
