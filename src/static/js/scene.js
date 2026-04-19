@@ -339,6 +339,8 @@
     const overlayAssetPanel = document.getElementById('overlay-asset-panel');
     let previewTimer = null;
     let latestPreviewRequestId = 0;
+    let previewInputRevision = 0;
+    let latestPreviewLayoutRevision = -1;
     let baseDragState = null;
     let previewObjectDragState = null;
     let overlayResizeState = null;
@@ -356,6 +358,7 @@
     let currentLayerOrderMode = 'aviutl';
     let currentLayerLocks = {};
     const loadedPreviewFonts = new Set();
+    let loadedTextFontItems = [];
     const minimumCharacterSlotCount = 1;
     const minimumTextSlotCount = 1;
     const defaultSectionOpenState = {
@@ -581,10 +584,26 @@
       slot.content = content;
     }
 
-    function cloneTextFontOptions(select) {
-      const sourceFontSelect = textSettingSlots[0]?.fontInput;
-      if (!select || !sourceFontSelect) return;
-      select.innerHTML = sourceFontSelect.innerHTML;
+    function populateTextFontOptions(select, selectedValue = '') {
+      if (!select) return;
+      select.innerHTML = '';
+      const defaultOption = document.createElement('option');
+      defaultOption.value = '';
+      defaultOption.textContent = '既定フォント';
+      select.appendChild(defaultOption);
+      loadedTextFontItems.forEach((item) => {
+        const option = document.createElement('option');
+        option.value = item.name;
+        option.textContent = item.name;
+        select.appendChild(option);
+      });
+      if (selectedValue && !loadedTextFontItems.some((item) => item.name === selectedValue)) {
+        const preservedOption = document.createElement('option');
+        preservedOption.value = selectedValue;
+        preservedOption.textContent = selectedValue;
+        select.appendChild(preservedOption);
+      }
+      select.value = selectedValue;
     }
 
     function createTextSlotBlock(slot) {
@@ -655,7 +674,7 @@
       const fontSelect = document.createElement('select');
       fontSelect.id = getTextDomId(slot.slot, 'font');
       fontSelect.name = `${slot.key}_font`;
-      cloneTextFontOptions(fontSelect);
+      populateTextFontOptions(fontSelect);
       fontField.appendChild(fontLabel);
       fontField.appendChild(fontSelect);
 
@@ -1028,7 +1047,7 @@
         slot.valueInput.value = textState.value;
       }
       if (slot.fontInput && typeof textState.font === 'string') {
-        slot.fontInput.value = textState.font;
+        populateTextFontOptions(slot.fontInput, textState.font);
       }
       if (slot.sizeInput && textState.size) {
         slot.sizeInput.value = String(textState.size);
@@ -1647,22 +1666,12 @@
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'フォント一覧の取得に失敗しました。');
         }
+        loadedTextFontItems = data.items || [];
         textSettingSlots.forEach((slot) => {
           const fontSelect = slot.fontInput;
           const currentValue = fontSelect?.value || '';
           if (!fontSelect) return;
-          fontSelect.innerHTML = '';
-          const defaultOption = document.createElement('option');
-          defaultOption.value = '';
-          defaultOption.textContent = '既定フォント';
-          fontSelect.appendChild(defaultOption);
-          (data.items || []).forEach((item) => {
-            const option = document.createElement('option');
-            option.value = item.name;
-            option.textContent = item.name;
-            fontSelect.appendChild(option);
-          });
-          fontSelect.value = currentValue;
+          populateTextFontOptions(fontSelect, currentValue);
         });
       } catch (error) {
         showSceneStatus(error.message || 'フォント一覧の取得に失敗しました。', 'error');
@@ -1919,7 +1928,16 @@
         content.textContent = '';
         content.style.textShadow = 'none';
         content.style.removeProperty('font-family');
+        content.style.removeProperty('font-size');
+        content.style.removeProperty('line-height');
+        content.style.removeProperty('color');
         content.style.removeProperty('text-align');
+      }
+      if (layer) {
+        layer.style.removeProperty('left');
+        layer.style.removeProperty('top');
+        layer.style.removeProperty('width');
+        layer.style.removeProperty('height');
       }
       if (contentBox) {
         contentBox.style.removeProperty('left');
@@ -1931,60 +1949,122 @@
       layer?.classList.add('is-hidden');
     }
 
-    function renderTextPreviewLayer({
-      layout,
-      layer,
-      content,
-      contentBox,
-      debugRect,
-      debugVisible,
-      colorInput,
-      strokeEnabledInput,
-      strokeColorInput,
-      fontInput,
-    }) {
-      if (!layout || !layer || !content || !contentBox) {
+    function getPreviewTextSize(slot) {
+      return Math.max(1, Math.round(Number(slot.sizeInput?.value || slot.defaultSize) * previewScaleFactor));
+    }
+
+    function getPreviewTextLineHeight(textSize) {
+      return textSize + Math.max(4, Math.round(textSize * 0.2));
+    }
+
+    function getPreviewTextStrokeWidth(slot) {
+      return Math.max(0, Math.round(Number(slot.strokeWidthInput?.value || 0) * previewScaleFactor));
+    }
+
+    function getFreshTextLayout(slot) {
+      if (latestPreviewLayoutRevision !== previewInputRevision) {
+        return null;
+      }
+      return latestPreviewLayout?.[slot.key] || null;
+    }
+
+    function markPreviewInputsChanged() {
+      previewInputRevision += 1;
+    }
+
+    function isTextLayerId(layerId) {
+      return /^text\d+$/.test(layerId || '');
+    }
+
+    function applyLocalTextPreview(slot) {
+      const { layer, content, contentBox, debugRect } = slot;
+      if (!slot.enabledInput?.checked || !slot.valueInput?.value || !layer || !content || !contentBox) {
         clearTextPreviewLayer({ layer, content, contentBox, debugRect });
         return;
       }
 
-      const textBoxRect = layout.text_box_rect || null;
-      const layerLeft = textBoxRect?.x || 0;
-      const layerTop = textBoxRect?.y || 0;
-      const layerWidth = textBoxRect?.width || 0;
-      const layerHeight = textBoxRect?.height || 0;
-      layer.style.left = `${layerLeft}px`;
-      layer.style.top = `${layerTop}px`;
-      layer.style.width = `${layerWidth}px`;
-      layer.style.height = `${layerHeight}px`;
-      content.textContent = layout.wrapped_text || '';
-      content.style.fontSize = `${layout.text_size || 16}px`;
-      content.style.lineHeight = `${(layout.text_size || 16) + (layout.line_spacing || 0)}px`;
-      content.style.color = colorInput?.value || '#ffffff';
-      content.style.textShadow = strokeEnabledInput?.checked ? buildPreviewTextShadow(layout.stroke_width || 0, strokeColorInput?.value || '#000000') : 'none';
-      const previewFontName = layout.resolved_font || fontInput?.value || '';
-      content.style.fontFamily = previewFontName ? `"${buildPreviewFontFamily(previewFontName)}", sans-serif` : '';
-      content.style.textAlign = layout.text_align || 'left';
-      if (textBoxRect) {
-        setDebugRect(debugRect, textBoxRect, debugVisible, layerLeft, layerTop);
-        contentBox.style.position = 'absolute';
-        contentBox.style.left = '0px';
-        contentBox.style.top = '0px';
-        contentBox.style.width = `${textBoxRect.width}px`;
-        contentBox.style.height = `${textBoxRect.height}px`;
-      }
+      const textSize = getPreviewTextSize(slot);
+      const strokeWidth = getPreviewTextStrokeWidth(slot);
+      const fontName = slot.fontInput?.value || '';
+      layer.style.left = `${Math.round(Number(slot.xInput?.value || 0) * previewScaleFactor)}px`;
+      layer.style.top = `${Math.round(Number(slot.yInput?.value || 0) * previewScaleFactor)}px`;
+      content.textContent = slot.valueInput.value || '';
+      content.style.fontSize = `${textSize}px`;
+      content.style.lineHeight = `${getPreviewTextLineHeight(textSize)}px`;
+      content.style.color = slot.colorInput?.value || '#ffffff';
+      content.style.textShadow = slot.strokeEnabledInput?.checked
+        ? buildPreviewTextShadow(strokeWidth, slot.strokeColorInput?.value || '#000000')
+        : 'none';
+      content.style.fontFamily = fontName ? `"${buildPreviewFontFamily(fontName)}", sans-serif` : '';
+      content.style.textAlign = 'left';
+      contentBox.style.position = 'absolute';
+      contentBox.style.left = '0px';
+      contentBox.style.top = '0px';
       layer.classList.remove('is-hidden');
+      updateImmediateTextLayerRect(slot);
+    }
+
+    function applySettledTextPreviewLayout(slot, layout) {
+      const { layer, content, contentBox, debugRect } = slot;
+      if (!layout || !layer || !contentBox) {
+        setDebugRect(debugRect, null, false);
+        return;
+      }
+      const textBoxRect = layout.text_box_rect || null;
+      if (!textBoxRect) {
+        setDebugRect(debugRect, null, false);
+        return;
+      }
+      const layerLeft = textBoxRect.x || 0;
+      const layerTop = textBoxRect.y || 0;
+      setLayerRect(layer, layerLeft, layerTop, textBoxRect.width || 1, textBoxRect.height || 1);
+      contentBox.style.width = `${textBoxRect.width || 1}px`;
+      contentBox.style.height = `${textBoxRect.height || 1}px`;
+      if (content && layout.resolved_font) {
+        content.style.fontFamily = `"${buildPreviewFontFamily(layout.resolved_font)}", sans-serif`;
+      }
+      setDebugRect(debugRect, textBoxRect, Boolean(slot.debugInput?.checked), layerLeft, layerTop);
+    }
+
+    function renderTextPreviewLayer(slot) {
+      applyLocalTextPreview(slot);
+      if (slot.layer?.classList.contains('is-hidden')) {
+        return;
+      }
+      applySettledTextPreviewLayout(slot, getFreshTextLayout(slot));
     }
 
     function renderMessageBandPreviewLayer() {
-      const layout = messageBandEnabledInput?.checked ? latestPreviewLayout?.message_band || null : null;
-      if (!messageBandLayer || !layout) {
+      if (!messageBandLayer || !messageBandEnabledInput?.checked) {
         messageBandLayer?.classList.add('is-hidden');
         return;
       }
-      setLayerRect(messageBandLayer, layout.x, layout.y, layout.width, layout.height);
-      messageBandLayer.style.background = buildPreviewRgba(layout.color || '#000000', layout.opacity || 0);
+      const x = Math.round(Number(messageBandXInput?.value || 0) * previewScaleFactor);
+      const y = Math.round(Number(messageBandYInput?.value || 0) * previewScaleFactor);
+      const width = Math.max(1, Math.round(Number(messageBandWidthInput?.value || 1) * previewScaleFactor));
+      const height = Math.max(1, Math.round(Number(messageBandHeightInput?.value || 1) * previewScaleFactor));
+      setLayerRect(messageBandLayer, x, y, width, height);
+      messageBandLayer.style.background = buildPreviewRgba(messageBandColorInput?.value || '#000000', messageBandOpacityInput?.value || 0);
       messageBandLayer.classList.remove('is-hidden');
+    }
+
+    function getLocalBubbleOverlayLayout() {
+      if (!bubbleOverlayEnabledInput?.checked) return null;
+      const sourceType = bubbleOverlaySourceTypeInput?.value || 'asset';
+      const serverLayout = latestPreviewLayout?.bubble_overlay || null;
+      const assetId = bubbleOverlayAssetInput?.value || serverLayout?.asset || '';
+      const bubbleAsset = sourceType === 'asset' ? getBubbleOverlayAsset(assetId) : null;
+      if (!bubbleAsset && sourceType !== 'file') return null;
+      return {
+        source_type: sourceType,
+        asset: assetId,
+        upload_file: serverLayout?.upload_file || '',
+        image_url: serverLayout?.image_url || '',
+        x: Math.round(Number(bubbleOverlayXInput?.value || 0) * previewScaleFactor),
+        y: Math.round(Number(bubbleOverlayYInput?.value || 0) * previewScaleFactor),
+        width: Math.max(1, Math.round(Number(bubbleOverlayWidthInput?.value || 1) * previewScaleFactor)),
+        height: Math.max(1, Math.round(Number(bubbleOverlayHeightInput?.value || 1) * previewScaleFactor)),
+      };
     }
 
     function renderBasePreviewLayerPosition() {
@@ -2046,7 +2126,7 @@
       });
 
       const bubbleDebugVisible = textSettingSlots.some((slot) => Boolean(slot.debugInput?.checked));
-      const bubbleOverlayLayout = bubbleOverlayEnabledInput?.checked ? latestPreviewLayout?.bubble_overlay || null : null;
+      const bubbleOverlayLayout = getLocalBubbleOverlayLayout();
       if (bubbleOverlayLayout && bubbleOverlayLayer) {
         const bubbleAsset = bubbleOverlayLayout.source_type === 'asset'
           ? getBubbleOverlayAsset(bubbleOverlayLayout.asset)
@@ -2094,18 +2174,7 @@
       }
 
       textSettingSlots.forEach((slot) => {
-        renderTextPreviewLayer({
-          layout: slot.enabledInput?.checked ? latestPreviewLayout?.[slot.key] || null : null,
-          layer: slot.layer,
-          content: slot.content,
-          contentBox: slot.contentBox,
-          debugRect: slot.debugRect,
-          debugVisible: Boolean(slot.debugInput?.checked),
-          colorInput: slot.colorInput,
-          strokeEnabledInput: slot.strokeEnabledInput,
-          strokeColorInput: slot.strokeColorInput,
-          fontInput: slot.fontInput,
-        });
+        renderTextPreviewLayer(slot);
       });
       updatePreviewViewportScale();
     }
@@ -2186,6 +2255,9 @@
         scaleX: scale.x,
         scaleY: scale.y,
       };
+      if (isTextLayerId(target.layerId)) {
+        markPreviewInputsChanged();
+      }
       target.layer.classList.add('is-dragging');
       target.layer.setPointerCapture(event.pointerId);
       event.stopPropagation();
@@ -2216,6 +2288,9 @@
       target.onCommit?.();
       saveSceneState();
       renderScenePreviewLayers();
+      if (isTextLayerId(target.layerId)) {
+        scheduleScenePreview();
+      }
       event.stopPropagation();
       event.preventDefault();
     }
@@ -2444,7 +2519,7 @@
       updateLayerLockControls();
     }
 
-    async function runScenePreview(requestId) {
+    async function runScenePreview(requestId, inputRevision) {
       if (!sceneForm) return;
       const hasBaseImage =
         Boolean(baseImageInput?.files?.[0]) ||
@@ -2467,20 +2542,22 @@
           body: formData,
         });
         const data = await response.json();
-        if (requestId !== latestPreviewRequestId) return;
+        if (requestId !== latestPreviewRequestId || inputRevision !== previewInputRevision) return;
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'プレビュー更新に失敗しました。');
         }
         latestPreviewLayout = data.layout || null;
+        latestPreviewLayoutRevision = inputRevision;
         await Promise.all(textSettingSlots.map((slot) => {
           const resolvedFont = latestPreviewLayout?.[slot.key]?.resolved_font || '';
           return resolvedFont ? ensurePreviewFont(resolvedFont) : Promise.resolve();
         }));
+        if (requestId !== latestPreviewRequestId || inputRevision !== previewInputRevision) return;
         renderScenePreviewLayers();
         showSceneStatus('');
         saveSceneState();
       } catch (error) {
-        if (requestId !== latestPreviewRequestId) return;
+        if (requestId !== latestPreviewRequestId || inputRevision !== previewInputRevision) return;
         showSceneStatus(error.message || 'プレビュー更新に失敗しました。', 'error');
       }
     }
@@ -2490,8 +2567,9 @@
         clearTimeout(previewTimer);
       }
       const requestId = ++latestPreviewRequestId;
+      const inputRevision = previewInputRevision;
       previewTimer = setTimeout(() => {
-        runScenePreview(requestId);
+        runScenePreview(requestId, inputRevision);
       }, 400);
     }
 
@@ -2501,7 +2579,7 @@
         previewTimer = null;
       }
       const requestId = ++latestPreviewRequestId;
-      await runScenePreview(requestId);
+      await runScenePreview(requestId, previewInputRevision);
     }
 
     function getCharacterSlotForLayoutInput(element) {
@@ -2555,22 +2633,7 @@
     function applyImmediateTextInputUpdate(element) {
       const slot = getTextSlotForInput(element);
       if (!slot) return;
-      if (slot.content) {
-        slot.content.style.color = slot.colorInput?.value || '#ffffff';
-        const strokeWidth = Math.max(0, Math.round(Number(slot.strokeWidthInput?.value || 0) * previewScaleFactor));
-        slot.content.style.textShadow = slot.strokeEnabledInput?.checked
-          ? buildPreviewTextShadow(strokeWidth, slot.strokeColorInput?.value || '#000000')
-          : 'none';
-      }
-      if (element === slot.valueInput && slot.content) {
-        slot.content.textContent = slot.valueInput.value || '';
-      } else if (element === slot.sizeInput && slot.content) {
-        const textSize = Math.max(1, Math.round(Number(slot.sizeInput.value || slot.defaultSize) * previewScaleFactor));
-        const lineSpacing = Math.max(4, Math.round(textSize * 0.2));
-        slot.content.style.fontSize = `${textSize}px`;
-        slot.content.style.lineHeight = `${textSize + lineSpacing}px`;
-      }
-      updateImmediateTextLayerRect(slot);
+      applyLocalTextPreview(slot);
     }
 
     function updateImmediateTextLayerRect(slot) {
@@ -2582,9 +2645,14 @@
       slot.layer.style.height = `${height}px`;
       slot.contentBox.style.width = `${width}px`;
       slot.contentBox.style.height = `${height}px`;
-      if (slot.debugRect?.classList.contains('is-visible')) {
+      if (slot.debugRect && slot.debugInput?.checked) {
+        slot.debugRect.style.left = '0px';
+        slot.debugRect.style.top = '0px';
         slot.debugRect.style.width = `${width}px`;
         slot.debugRect.style.height = `${height}px`;
+        slot.debugRect.classList.add('is-visible');
+      } else {
+        slot.debugRect?.classList.remove('is-visible');
       }
     }
 
@@ -2744,7 +2812,10 @@
     function getTextSlotForInput(element) {
       return textSettingSlots.find((slot) => (
         element === slot.valueInput ||
+        element === slot.enabledInput ||
+        element === slot.fontInput ||
         element === slot.sizeInput ||
+        element === slot.strokeEnabledInput ||
         element === slot.strokeWidthInput ||
         element === slot.colorInput ||
         element === slot.strokeColorInput ||
@@ -2759,36 +2830,40 @@
       slot.eventsRegistered = true;
       [slot.colorInput, slot.strokeColorInput, slot.xInput, slot.yInput].forEach((element) => {
         element?.addEventListener('change', () => {
-          requestCommittedPreviewUpdate({ server: false });
+          markPreviewInputsChanged();
+          requestCommittedPreviewUpdate();
         });
         element?.addEventListener('input', () => {
+          markPreviewInputsChanged();
           applyImmediateTextInputUpdate(element);
-          applyImmediatePreviewUpdate({ portraitSlot: character1SlotDef });
+          saveSceneState();
+          scheduleScenePreview();
         });
       });
       [slot.valueInput, slot.sizeInput, slot.strokeWidthInput].forEach((element) => {
         element?.addEventListener('change', () => {
+          markPreviewInputsChanged();
           requestCommittedPreviewUpdate();
         });
         element?.addEventListener('input', () => {
+          markPreviewInputsChanged();
           applyImmediateTextInputUpdate(element);
           saveSceneState();
-          if (element !== slot.sizeInput) {
-            scheduleScenePreview();
-          }
+          scheduleScenePreview();
         });
       });
       slot.enabledInput?.addEventListener('change', () => {
+        markPreviewInputsChanged();
         updateVisibilityIcon(slot.enabledInput);
-        renderScenePreviewLayers();
+        applyImmediateTextInputUpdate(slot.enabledInput);
         saveSceneState();
         if (slot.enabledInput.checked) {
           scheduleScenePreview();
         }
       });
       slot.strokeEnabledInput?.addEventListener('change', () => {
+        markPreviewInputsChanged();
         applyImmediateTextInputUpdate(slot.strokeEnabledInput);
-        renderScenePreviewLayers();
         saveSceneState();
         scheduleScenePreview();
       });
@@ -2797,12 +2872,21 @@
         saveSceneState();
       });
       slot.fontInput?.addEventListener('change', async () => {
-        if (slot.fontInput.value) {
-          await ensurePreviewFont(slot.fontInput.value);
-        }
-        renderScenePreviewLayers();
+        markPreviewInputsChanged();
+        applyImmediateTextInputUpdate(slot.fontInput);
+        const inputRevision = previewInputRevision;
         saveSceneState();
         scheduleScenePreview();
+        if (slot.fontInput.value) {
+          try {
+            await ensurePreviewFont(slot.fontInput.value);
+          } catch {
+            // The settled server preview still resolves the fallback font.
+          }
+        }
+        if (inputRevision === previewInputRevision) {
+          applyImmediateTextInputUpdate(slot.fontInput);
+        }
       });
       const dragSlot = buildTextDragSlot(slot.key, slot.layerId, slot.xInput, slot.yInput, slot.layer);
       slot.layer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(dragSlot, event));
