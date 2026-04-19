@@ -370,6 +370,8 @@
     let overlayResizeState = null;
     let layerOrderDraggingBlock = null;
     let baseObjectUrl = null;
+    let baseObjectUrlFile = null;
+    let currentBasePreviewSourceKey = '';
     let restoredBaseImageUrl = '';
     let indexedDbBaseImageBlob = null;
     let sceneBaseImageDbPromise = null;
@@ -1569,28 +1571,52 @@
     }
 
     function updatePreviewSources() {
-      if (baseObjectUrl) {
+      const baseFile = baseImageInput?.files?.[0];
+      const serverBaseImageUrl = getServerBaseImageUrl();
+      const nextBaseSourceKey = baseFile
+        ? `file:${baseFile.name}:${baseFile.size}:${baseFile.lastModified}`
+        : serverBaseImageUrl
+          ? `server:${serverBaseImageUrl}`
+          : indexedDbBaseImageBlob
+            ? `indexeddb:${indexedDbBaseImageBlob.size}:${indexedDbBaseImageBlob.lastModified || 0}`
+            : '';
+
+      if (nextBaseSourceKey !== currentBasePreviewSourceKey && baseObjectUrl) {
         URL.revokeObjectURL(baseObjectUrl);
         baseObjectUrl = null;
+        baseObjectUrlFile = null;
       }
 
-      const baseFile = baseImageInput?.files?.[0];
       if (baseFile && baseLayer) {
-        baseObjectUrl = URL.createObjectURL(baseFile);
-        baseLayer.src = baseObjectUrl;
+        if (!baseObjectUrl || baseObjectUrlFile !== baseFile) {
+          baseObjectUrl = URL.createObjectURL(baseFile);
+          baseObjectUrlFile = baseFile;
+        }
+        if (baseLayer.src !== baseObjectUrl) {
+          baseLayer.src = baseObjectUrl;
+        }
         baseLayer.classList.remove('is-hidden');
-      } else if (baseLayer && getServerBaseImageUrl()) {
-        const restoredUrl = getServerBaseImageUrl();
-        baseLayer.src = `${restoredUrl}?t=${Date.now()}`;
+      } else if (baseLayer && serverBaseImageUrl) {
+        if (baseLayer.src !== new URL(serverBaseImageUrl, window.location.href).href) {
+          baseLayer.src = serverBaseImageUrl;
+        }
         baseLayer.classList.remove('is-hidden');
       } else if (baseLayer && indexedDbBaseImageBlob) {
-        baseObjectUrl = URL.createObjectURL(indexedDbBaseImageBlob);
-        baseLayer.src = baseObjectUrl;
+        if (!baseObjectUrl || baseObjectUrlFile !== indexedDbBaseImageBlob) {
+          baseObjectUrl = URL.createObjectURL(indexedDbBaseImageBlob);
+          baseObjectUrlFile = indexedDbBaseImageBlob;
+        }
+        if (baseLayer.src !== baseObjectUrl) {
+          baseLayer.src = baseObjectUrl;
+        }
         baseLayer.classList.remove('is-hidden');
       } else if (baseLayer) {
-        baseLayer.removeAttribute('src');
+        if (baseLayer.hasAttribute('src')) {
+          baseLayer.removeAttribute('src');
+        }
         baseLayer.classList.add('is-hidden');
       }
+      currentBasePreviewSourceKey = nextBaseSourceKey;
 
       characterSlots.forEach((slot) => {
         const activePortraitUrl = getCharacterActiveUrl(slot);
