@@ -380,7 +380,7 @@
     let currentLayerOrderMode = 'aviutl';
     let currentLayerLocks = {};
     const loadedPreviewFonts = new Set();
-    const minimumCharacterSlotCount = 3;
+    const minimumCharacterSlotCount = 1;
     const defaultSectionOpenState = {
       base: true,
       canvas: false,
@@ -457,6 +457,14 @@
     function ensureCharacterSlotCount(slotCount) {
       while (characterSlots.length < slotCount) {
         addCharacterSlot({ save: false });
+      }
+    }
+
+    function syncCharacterSlotCount(slotCount) {
+      const targetCount = Math.max(minimumCharacterSlotCount, Number(slotCount) || minimumCharacterSlotCount);
+      ensureCharacterSlotCount(targetCount);
+      while (characterSlots.length > targetCount) {
+        removeLastCharacterSlot({ save: false });
       }
     }
 
@@ -969,7 +977,7 @@
         return;
       }
 
-      ensureCharacterSlotCount(getCharacterSlotCountFromState(stored));
+      syncCharacterSlotCount(getCharacterSlotCountFromState(stored));
       characterSlots.forEach((slot) => applyCharacterState(slot, stored));
       const storedCanvasPreset = stored.canvas_preset || stored.canvas_size || '';
       if (canvasPresetSelect && storedCanvasPreset && canvasPresets[storedCanvasPreset]) {
@@ -2503,12 +2511,14 @@
       updateCharacterSlotControls();
     }
 
-    function removeLastCharacterSlot() {
+    function removeLastCharacterSlot({ save = true } = {}) {
       if (characterSlots.length <= minimumCharacterSlotCount) return;
       const slot = characterSlots[characterSlots.length - 1];
       const layerId = slot.layerId;
 
-      savePortraitLayoutState(getCharacterPortraitLayoutKey(slot), slot);
+      if (save) {
+        savePortraitLayoutState(getCharacterPortraitLayoutKey(slot), slot);
+      }
       document
         .querySelector(`.settings-block[data-layer-id="${layerId}"]`)
         ?.remove();
@@ -2528,7 +2538,9 @@
       applyLayerOrderToPreviewDom();
       updateCurrentSourceLabel();
       renderScenePreviewLayers();
-      saveSceneState();
+      if (save) {
+        saveSceneState();
+      }
       updateCharacterSlotControls();
     }
 
@@ -2564,7 +2576,7 @@
       }
     });
     addCharacterSlotButton?.addEventListener('click', () => addCharacterSlot());
-    removeCharacterSlotButton?.addEventListener('click', removeLastCharacterSlot);
+    removeCharacterSlotButton?.addEventListener('click', () => removeLastCharacterSlot());
     baseLayer?.addEventListener('load', renderScenePreviewLayers);
     bubbleOverlayLayer?.addEventListener('load', renderScenePreviewLayers);
     window.addEventListener('resize', renderScenePreviewLayers);
