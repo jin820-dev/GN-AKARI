@@ -619,6 +619,14 @@ input[type="file"] {
   .layout {
     grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
   }
+
+  .layout > .panel:last-child {
+    align-self: start;
+  }
+
+  .layout > .panel:last-child .preview-stage {
+    flex: 0 0 auto;
+  }
 }
 @media (max-width: 899px) {
   .layout {
