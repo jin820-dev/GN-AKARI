@@ -25,6 +25,7 @@
     const previewCanvas = document.getElementById('preview-canvas');
     const layerOrderInput = document.getElementById('layer-order');
     const layerOrderModeInput = document.getElementById('layer-order-mode');
+    const sceneLayerListEnd = document.getElementById('scene-layer-list-end');
     const addCharacterSlotButton = document.getElementById('add-character-slot');
     const removeCharacterSlotButton = document.getElementById('remove-character-slot');
     const addTextSlotButton = document.getElementById('add-text-slot');
@@ -622,7 +623,7 @@
       headerMain.className = 'settings-block-header-main';
       const title = document.createElement('h3');
       title.className = 'settings-block-title';
-      title.textContent = `テキスト設定${slot.slot}`;
+      title.textContent = `テキスト${slot.slot}`;
       headerMain.appendChild(title);
 
       const actions = document.createElement('span');
@@ -914,11 +915,11 @@
 
     function applyLayerOrderToSettingsBlocks() {
       if (!sceneForm) return;
-      const saveButton = sceneForm.querySelector('button[type="submit"]');
+      const listEnd = sceneLayerListEnd || sceneForm.querySelector('button[type="submit"]');
       resolveLayerDisplayOrder().forEach((layerId) => {
         const block = getLayerBlock(layerId);
-        if (block && saveButton) {
-          sceneForm.insertBefore(block, saveButton);
+        if (block && listEnd) {
+          sceneForm.insertBefore(block, listEnd);
         }
       });
     }
@@ -2968,7 +2969,7 @@
       currentLayerLocks[slot.layerId] = false;
 
       const block = createTextSlotBlock(slot);
-      addTextSlotButton?.parentNode?.insertBefore(block, addTextSlotButton);
+      sceneForm?.insertBefore(block, sceneLayerListEnd || addTextSlotButton);
       bindTextSlotDomRefs(slot);
       registerTextSlotEvents(slot);
       registerSectionToggle(block.querySelector('[data-settings-toggle]'));

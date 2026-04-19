@@ -38,6 +38,25 @@
         <input type="hidden" id="layer-order" name="layer_order" value="">
         <input type="hidden" id="layer-order-mode" name="layer_order_mode" value="">
 
+        <div class="scene-toolbar" aria-label="Scene operations">
+          <button type="button" id="add-character-slot" class="scene-toolbar-button" title="キャラ追加" aria-label="キャラ追加">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 19a6 6 0 0 0-12 0"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M16 11h6"/></svg>
+          </button>
+          <button type="button" id="remove-character-slot" class="scene-toolbar-button" title="最後のキャラ削除" aria-label="最後のキャラ削除">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 19a6 6 0 0 0-12 0"/><circle cx="9" cy="7" r="4"/><path d="M16 11h6"/></svg>
+          </button>
+          <button type="button" id="add-text-slot" class="scene-toolbar-button" title="テキスト追加" aria-label="テキスト追加">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h10a3 3 0 0 1 3 3v3a3 3 0 0 1-3 3H9l-4 4v-4a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3Z"/><path d="M19 15v6"/><path d="M16 18h6"/></svg>
+          </button>
+          <button type="button" id="remove-text-slot" class="scene-toolbar-button" title="最後のテキスト削除" aria-label="最後のテキスト削除">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h10a3 3 0 0 1 3 3v3a3 3 0 0 1-3 3H9l-4 4v-4a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3Z"/><path d="M16 18h6"/></svg>
+          </button>
+          <button type="submit" class="scene-toolbar-button scene-toolbar-button--save" title="保存" aria-label="保存">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+          </button>
+        </div>
+        <div id="scene-status" class="status"></div>
+
         <div class="settings-block" data-section-key="base" data-layer-id="base_image">
           <button type="button" class="settings-block-header" data-settings-toggle="base" aria-expanded="true">
             <span class="settings-block-header-main">
@@ -104,13 +123,11 @@
         </div>
 
         <div id="character-slots-container"></div>
-        <button type="button" id="add-character-slot">キャラ追加</button>
-        <button type="button" id="remove-character-slot">最後のキャラ削除</button>
 
         <div class="settings-block" data-section-key="text" data-layer-id="text1">
           <button type="button" class="settings-block-header" data-settings-toggle="text" aria-expanded="true">
             <span class="settings-block-header-main">
-              <h3 class="settings-block-title">テキスト設定1</h3>
+              <h3 class="settings-block-title">テキスト1</h3>
             </span>
             <span class="settings-block-header-actions">
               <label class="section-visible-toggle" for="text-enabled">
@@ -181,7 +198,7 @@
         <div class="settings-block" data-section-key="text2" data-layer-id="text2">
           <button type="button" class="settings-block-header" data-settings-toggle="text2" aria-expanded="true">
             <span class="settings-block-header-main">
-              <h3 class="settings-block-title">テキスト設定2</h3>
+              <h3 class="settings-block-title">テキスト2</h3>
             </span>
             <span class="settings-block-header-actions">
               <label class="section-visible-toggle" for="text2-enabled">
@@ -248,9 +265,6 @@
           </div>
           </div>
         </div>
-
-        <button type="button" id="add-text-slot">テキスト追加</button>
-        <button type="button" id="remove-text-slot">最後のテキスト削除</button>
 
         <div class="settings-block" data-section-key="message-band" data-layer-id="message_band">
           <button type="button" class="settings-block-header" data-settings-toggle="message-band" aria-expanded="true">
@@ -348,12 +362,8 @@
           </div>
         </div>
 
-        <button type="submit" title="保存">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
-          保存
-        </button>
+        <div id="scene-layer-list-end"></div>
       </form>
-      <div id="scene-status" class="status"></div>
     </section>
 
     <section class="panel">
