@@ -347,6 +347,7 @@
     let overlayResizeState = null;
     let layerOrderDraggingBlock = null;
     let activeLayerId = '';
+    let previewHitCycleState = null;
     let baseObjectUrl = null;
     let baseObjectUrlFile = null;
     let currentBasePreviewSourceKey = '';
@@ -922,6 +923,38 @@
       if (textSlot) return textSlot.dragTarget || null;
       if (layerId === 'overlay_image') return overlayDragTarget;
       return null;
+    }
+
+    function getPreviewHitCandidates(event) {
+      return [...resolveLayerDrawOrder()]
+        .reverse()
+        .map((layerId) => getPreviewDragTarget(layerId))
+        .filter((target, index, targets) => (
+          target
+          && targets.findIndex((candidate) => candidate?.layerId === target.layerId) === index
+          && isPointerInsideLayer(target.layer, event)
+          && !isLayerLocked(target.layerId)
+        ));
+    }
+
+    function choosePreviewHitCandidate(candidates, event) {
+      if (candidates.length === 0) return null;
+      const signature = candidates.map((target) => target.layerId).join('|');
+      const activeIndex = candidates.findIndex((target) => target.layerId === activeLayerId);
+      const sameCycle = previewHitCycleState
+        && previewHitCycleState.signature === signature
+        && Math.abs(previewHitCycleState.x - event.clientX) <= 8
+        && Math.abs(previewHitCycleState.y - event.clientY) <= 8;
+      const nextIndex = sameCycle
+        ? (previewHitCycleState.index + 1) % candidates.length
+        : Math.max(0, activeIndex);
+      previewHitCycleState = {
+        x: event.clientX,
+        y: event.clientY,
+        signature,
+        index: nextIndex,
+      };
+      return candidates[nextIndex];
     }
 
     function isPointerInsideLayer(layer, event) {
@@ -2313,9 +2346,8 @@
 
     function beginSelectedPreviewObjectDrag(event) {
       if (event.target.closest('.preview-overlay-resize-handle')) return;
-      const target = getPreviewDragTarget(activeLayerId);
-      if (!target?.layer || target.layer.contains(event.target)) return;
-      if (!isPointerInsideLayer(target.layer, event)) return;
+      const target = choosePreviewHitCandidate(getPreviewHitCandidates(event), event);
+      if (!target?.layer) return;
       beginPreviewObjectDrag(target, event);
       event.stopImmediatePropagation();
     }
