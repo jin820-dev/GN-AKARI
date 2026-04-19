@@ -624,6 +624,11 @@ input[type="file"] {
     align-self: start;
   }
 
+  .layout > .panel:first-child {
+    align-self: start;
+    max-height: 100%;
+  }
+
   .layout > .panel:last-child .preview-stage {
     flex: 0 0 auto;
   }
