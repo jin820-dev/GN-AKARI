@@ -17,6 +17,7 @@ body {
   line-height: 1.5;
   background: var(--akari-bg);
   color: var(--text-main);
+  overflow: hidden;
 }
 h1, h2, h3 {
   color: var(--text-main);
@@ -106,7 +107,10 @@ h3 {
   display: grid;
   grid-template-columns: 1fr;
   gap: 24px;
-  align-items: start;
+  align-items: stretch;
+  height: calc(100vh - 120px);
+  min-height: 520px;
+  overflow: hidden;
 }
 
 /* Panel */
@@ -116,6 +120,17 @@ h3 {
   border-radius: 12px;
   padding: 16px;
   box-shadow: 0 8px 24px rgba(230, 145, 56, 0.08);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout > .panel:first-child {
+  overflow-y: auto;
+}
+
+.layout > .panel:last-child {
+  display: flex;
+  flex-direction: column;
 }
 
 /* Scene toolbar */
@@ -415,12 +430,16 @@ input[type="file"] {
   box-sizing: border-box;
   cursor: grab;
   touch-action: none;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 .preview-stage.is-dragging {
   cursor: grabbing;
 }
 .preview-stage-viewport {
   width: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 .preview-stage-scale {
@@ -601,6 +620,19 @@ input[type="file"] {
     grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
   }
 }
+@media (max-width: 899px) {
+  .layout {
+    grid-template-rows: minmax(220px, 42vh) minmax(0, 1fr);
+  }
+
+  .layout > .panel:first-child {
+    order: 2;
+  }
+
+  .layout > .panel:last-child {
+    order: 1;
+  }
+}
 @media (max-width: 640px) {
   .row {
     grid-template-columns: 1fr;
@@ -657,14 +689,8 @@ button svg {
 
   .layout {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .layout > .panel:first-child {
-    order: 2;
-  }
-
-  .layout > .panel:last-child {
-    order: 1;
+    height: calc(100vh - 96px);
+    min-height: 460px;
   }
 
   .panel,
@@ -698,6 +724,9 @@ button svg {
 
   .layout {
     grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.1fr);
+    grid-template-rows: none;
+    height: calc(100vh - 96px);
+    min-height: 0;
     gap: 12px;
   }
 
