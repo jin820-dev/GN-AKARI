@@ -2317,6 +2317,7 @@
       if (!target?.layer || target.layer.contains(event.target)) return;
       if (!isPointerInsideLayer(target.layer, event)) return;
       beginPreviewObjectDrag(target, event);
+      event.stopImmediatePropagation();
     }
 
     function updatePreviewObjectDrag(event) {
