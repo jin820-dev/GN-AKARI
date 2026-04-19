@@ -27,6 +27,9 @@
     const layerOrderModeInput = document.getElementById('layer-order-mode');
     const addCharacterSlotButton = document.getElementById('add-character-slot');
     const removeCharacterSlotButton = document.getElementById('remove-character-slot');
+    const addTextSlotButton = document.getElementById('add-text-slot');
+    const removeTextSlotButton = document.getElementById('remove-text-slot');
+    const textSlotCountInput = document.getElementById('text-slot-count');
     const baseLayer = document.getElementById('base-layer');
     const messageBandLayer = document.getElementById('message-band-layer');
     const portraitLayer = document.getElementById('portrait-layer');
@@ -35,15 +38,7 @@
     const bubbleOverlayLayer = document.getElementById('bubble-overlay-layer');
     const bubbleOverlayResizeHandleRight = document.getElementById('bubble-overlay-resize-handle-right');
     const bubbleOverlayResizeHandleBottom = document.getElementById('bubble-overlay-resize-handle-bottom');
-    const textLayer = document.getElementById('text-layer');
-    const textLayer2 = document.getElementById('text-layer-2');
     const bubbleDebugRect = document.getElementById('bubble-debug-rect');
-    const textBoxDebugRect = document.getElementById('text-box-debug-rect');
-    const textBoxDebugRect2 = document.getElementById('text-box-debug-rect-2');
-    const textContentBox = document.getElementById('text-content-box');
-    const textContentBox2 = document.getElementById('text-content-box-2');
-    const textContent = document.getElementById('text-content');
-    const textContent2 = document.getElementById('text-content-2');
     const sceneEmpty = document.getElementById('scene-empty');
     const sceneLink = document.getElementById('scene-link');
     const sceneLinkRow = document.getElementById('scene-link-row');
@@ -327,27 +322,6 @@
     renderCharacterSlotBlocks();
     characterSlotDefs.forEach(bindCharacterSlotDomRefs);
     const character1SlotDef = characterSlotDefs[0];
-    const textEnabledInput = document.getElementById('text-enabled');
-    const textValueInput = document.getElementById('text-value');
-    const textFontSelect = document.getElementById('text-font');
-    const textSizeInput = document.getElementById('text-size');
-    const textColorInput = document.getElementById('text-color');
-    const textStrokeEnabledInput = document.getElementById('text-stroke-enabled');
-    const textDebugLayoutInput = document.getElementById('text-debug-layout');
-    const textStrokeColorInput = document.getElementById('text-stroke-color');
-    const textStrokeWidthInput = document.getElementById('text-stroke-width');
-    const textXInput = document.getElementById('text-x');
-    const textYInput = document.getElementById('text-y');
-    const text2EnabledInput = document.getElementById('text2-enabled');
-    const text2ValueInput = document.getElementById('text2-value');
-    const text2FontSelect = document.getElementById('text2-font');
-    const text2SizeInput = document.getElementById('text2-size');
-    const text2ColorInput = document.getElementById('text2-color');
-    const text2StrokeEnabledInput = document.getElementById('text2-stroke-enabled');
-    const text2StrokeColorInput = document.getElementById('text2-stroke-color');
-    const text2StrokeWidthInput = document.getElementById('text2-stroke-width');
-    const text2XInput = document.getElementById('text2-x');
-    const text2YInput = document.getElementById('text2-y');
     const messageBandEnabledInput = document.getElementById('message-band-enabled');
     const messageBandXInput = document.getElementById('message-band-x');
     const messageBandYInput = document.getElementById('message-band-y');
@@ -383,6 +357,7 @@
     let currentLayerLocks = {};
     const loadedPreviewFonts = new Set();
     const minimumCharacterSlotCount = 1;
+    const minimumTextSlotCount = 1;
     const defaultSectionOpenState = {
       base: true,
       canvas: false,
@@ -470,6 +445,59 @@
       }
     }
 
+    function getTextSlotCountFromState(stored) {
+      const explicitCount = Number(stored?.text_slot_count || 0);
+      if (explicitCount > 0) {
+        return Math.max(minimumTextSlotCount, explicitCount);
+      }
+      const counts = [minimumTextSlotCount];
+      if (stored?.text2) {
+        counts.push(2);
+      }
+      const layerOrder = Array.isArray(stored?.layer_order) ? stored.layer_order : [];
+      layerOrder.forEach((layerId) => {
+        const match = String(layerId).match(/^text(\d+)$/);
+        if (match) {
+          counts.push(Number(match[1]) || 0);
+        }
+      });
+      Object.keys(stored || {}).forEach((key) => {
+        const match = key.match(/^text(\d+)$/);
+        if (match) {
+          counts.push(Number(match[1]) || 0);
+        }
+      });
+      return Math.max(...counts);
+    }
+
+    function updateTextSlotCountInput() {
+      if (textSlotCountInput) {
+        textSlotCountInput.value = String(textSettingSlots.length);
+      }
+    }
+
+    function updateTextSlotControls() {
+      if (removeTextSlotButton) {
+        removeTextSlotButton.disabled = textSettingSlots.length <= minimumTextSlotCount;
+      }
+      updateTextSlotCountInput();
+    }
+
+    function ensureTextSlotCount(slotCount) {
+      while (textSettingSlots.length < slotCount) {
+        addTextSlot({ save: false });
+      }
+    }
+
+    function syncTextSlotCount(slotCount) {
+      const targetCount = Math.max(minimumTextSlotCount, Number(slotCount) || minimumTextSlotCount);
+      ensureTextSlotCount(targetCount);
+      while (textSettingSlots.length > targetCount) {
+        removeLastTextSlot({ save: false });
+      }
+      updateTextSlotControls();
+    }
+
     function updateCharacterSlotControls() {
       if (removeCharacterSlotButton) {
         removeCharacterSlotButton.disabled = characterSlots.length <= minimumCharacterSlotCount;
@@ -488,40 +516,273 @@
         : (slot.cacheKeyInput?.dataset.portraitFilename || '');
     }
 
-    const textSettingSlots = [
-      {
-        key: 'text',
-        enabledInput: textEnabledInput,
-        valueInput: textValueInput,
-        fontInput: textFontSelect,
-        sizeInput: textSizeInput,
-        colorInput: textColorInput,
-        strokeEnabledInput: textStrokeEnabledInput,
-        strokeColorInput: textStrokeColorInput,
-        strokeWidthInput: textStrokeWidthInput,
-        xInput: textXInput,
-        yInput: textYInput,
-        defaultX: '0',
-        defaultY: '0',
-        defaultSize: '32',
-      },
-      {
-        key: 'text2',
-        enabledInput: text2EnabledInput,
-        valueInput: text2ValueInput,
-        fontInput: text2FontSelect,
-        sizeInput: text2SizeInput,
-        colorInput: text2ColorInput,
-        strokeEnabledInput: text2StrokeEnabledInput,
-        strokeColorInput: text2StrokeColorInput,
-        strokeWidthInput: text2StrokeWidthInput,
-        xInput: text2XInput,
-        yInput: text2YInput,
-        defaultX: '100',
-        defaultY: '100',
-        defaultSize: '64',
-      },
-    ];
+    function getTextSlotKey(slotNumber) {
+      return slotNumber === 1 ? 'text' : `text${slotNumber}`;
+    }
+
+    function getTextLayerId(slotNumber) {
+      return `text${slotNumber}`;
+    }
+
+    function getTextDomId(slotNumber, field) {
+      const prefix = slotNumber === 1 ? 'text' : `text${slotNumber}`;
+      return `${prefix}-${field}`;
+    }
+
+    function buildTextSlot(slotNumber, refs = {}) {
+      const key = getTextSlotKey(slotNumber);
+      return {
+        slot: slotNumber,
+        key,
+        layerId: getTextLayerId(slotNumber),
+        enabledInput: refs.enabledInput || document.getElementById(getTextDomId(slotNumber, 'enabled')),
+        valueInput: refs.valueInput || document.getElementById(getTextDomId(slotNumber, 'value')),
+        fontInput: refs.fontInput || document.getElementById(getTextDomId(slotNumber, 'font')),
+        sizeInput: refs.sizeInput || document.getElementById(getTextDomId(slotNumber, 'size')),
+        colorInput: refs.colorInput || document.getElementById(getTextDomId(slotNumber, 'color')),
+        strokeEnabledInput: refs.strokeEnabledInput || document.getElementById(getTextDomId(slotNumber, 'stroke-enabled')),
+        strokeColorInput: refs.strokeColorInput || document.getElementById(getTextDomId(slotNumber, 'stroke-color')),
+        strokeWidthInput: refs.strokeWidthInput || document.getElementById(getTextDomId(slotNumber, 'stroke-width')),
+        debugInput: refs.debugInput || document.getElementById(getTextDomId(slotNumber, 'debug-layout')),
+        xInput: refs.xInput || document.getElementById(getTextDomId(slotNumber, 'x')),
+        yInput: refs.yInput || document.getElementById(getTextDomId(slotNumber, 'y')),
+        layer: refs.layer || document.getElementById(slotNumber === 1 ? 'text-layer' : `text-layer-${slotNumber}`),
+        content: refs.content || document.getElementById(slotNumber === 1 ? 'text-content' : `text-content-${slotNumber}`),
+        contentBox: refs.contentBox || document.getElementById(slotNumber === 1 ? 'text-content-box' : `text-content-box-${slotNumber}`),
+        debugRect: refs.debugRect || document.getElementById(slotNumber === 1 ? 'text-box-debug-rect' : `text-box-debug-rect-${slotNumber}`),
+        defaultX: slotNumber === 1 ? '0' : '100',
+        defaultY: slotNumber === 1 ? '0' : '100',
+        defaultSize: slotNumber === 1 ? '32' : '64',
+      };
+    }
+
+    const textSettingSlots = [buildTextSlot(1), buildTextSlot(2)];
+
+    function createTextPreviewLayer(slot) {
+      const layer = document.createElement('div');
+      layer.id = `text-layer-${slot.slot}`;
+      layer.className = 'preview-text-layer is-hidden';
+      const debugRect = document.createElement('div');
+      debugRect.id = `text-box-debug-rect-${slot.slot}`;
+      debugRect.className = 'preview-debug-rect preview-debug-rect--text';
+      const contentBox = document.createElement('div');
+      contentBox.id = `text-content-box-${slot.slot}`;
+      contentBox.className = 'preview-text-content-box';
+      const content = document.createElement('div');
+      content.id = `text-content-${slot.slot}`;
+      content.className = 'preview-text-content';
+      contentBox.appendChild(content);
+      layer.appendChild(debugRect);
+      layer.appendChild(contentBox);
+      previewCanvas?.appendChild(layer);
+      slot.layer = layer;
+      slot.debugRect = debugRect;
+      slot.contentBox = contentBox;
+      slot.content = content;
+    }
+
+    function cloneTextFontOptions(select) {
+      const sourceFontSelect = textSettingSlots[0]?.fontInput;
+      if (!select || !sourceFontSelect) return;
+      select.innerHTML = sourceFontSelect.innerHTML;
+    }
+
+    function createTextSlotBlock(slot) {
+      const block = document.createElement('div');
+      block.className = 'settings-block';
+      block.dataset.sectionKey = slot.key;
+      block.dataset.layerId = slot.layerId;
+
+      const header = document.createElement('button');
+      header.type = 'button';
+      header.className = 'settings-block-header';
+      header.dataset.settingsToggle = slot.key;
+      header.setAttribute('aria-expanded', 'true');
+
+      const headerMain = document.createElement('span');
+      headerMain.className = 'settings-block-header-main';
+      const title = document.createElement('h3');
+      title.className = 'settings-block-title';
+      title.textContent = `テキスト設定${slot.slot}`;
+      headerMain.appendChild(title);
+
+      const actions = document.createElement('span');
+      actions.className = 'settings-block-header-actions';
+      const visibleLabel = document.createElement('label');
+      visibleLabel.className = 'section-visible-toggle';
+      visibleLabel.htmlFor = getTextDomId(slot.slot, 'enabled');
+      const enabledInput = document.createElement('input');
+      enabledInput.id = getTextDomId(slot.slot, 'enabled');
+      enabledInput.name = `${slot.key}_enabled`;
+      enabledInput.type = 'checkbox';
+      enabledInput.value = '1';
+      const visibilityIcon = document.createElement('span');
+      visibilityIcon.className = 'visibility-icon';
+      visibilityIcon.setAttribute('aria-hidden', 'true');
+      visibleLabel.appendChild(enabledInput);
+      visibleLabel.appendChild(visibilityIcon);
+      visibleLabel.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+      const collapseToggle = document.createElement('span');
+      collapseToggle.className = 'settings-block-toggle';
+      collapseToggle.setAttribute('aria-hidden', 'true');
+      actions.appendChild(visibleLabel);
+      actions.appendChild(collapseToggle);
+      header.appendChild(headerMain);
+      header.appendChild(actions);
+
+      const body = document.createElement('div');
+      body.className = 'settings-block-body settings-block-body--compact';
+      const textField = document.createElement('div');
+      textField.className = 'field';
+      const textLabel = document.createElement('label');
+      textLabel.htmlFor = getTextDomId(slot.slot, 'value');
+      textLabel.textContent = 'テキスト';
+      const textarea = document.createElement('textarea');
+      textarea.id = getTextDomId(slot.slot, 'value');
+      textarea.name = `${slot.key}_value`;
+      textarea.rows = 3;
+      textarea.placeholder = `${slot.slot}つ目のテキストを入力`;
+      textField.appendChild(textLabel);
+      textField.appendChild(textarea);
+
+      const fontField = document.createElement('div');
+      fontField.className = 'field';
+      const fontLabel = document.createElement('label');
+      fontLabel.htmlFor = getTextDomId(slot.slot, 'font');
+      fontLabel.textContent = 'フォント';
+      const fontSelect = document.createElement('select');
+      fontSelect.id = getTextDomId(slot.slot, 'font');
+      fontSelect.name = `${slot.key}_font`;
+      cloneTextFontOptions(fontSelect);
+      fontField.appendChild(fontLabel);
+      fontField.appendChild(fontSelect);
+
+      const sizeColorRow = document.createElement('div');
+      sizeColorRow.className = 'row row--2';
+      [
+        { label: 'サイズ', field: 'size', name: `${slot.key}_size`, type: 'number', value: slot.defaultSize, min: '1' },
+        { label: '色', field: 'color', name: `${slot.key}_color`, type: 'color', value: '#ffffff' },
+      ].forEach((fieldDef) => {
+        const field = document.createElement('div');
+        field.className = 'field';
+        const label = document.createElement('label');
+        label.htmlFor = getTextDomId(slot.slot, fieldDef.field);
+        label.textContent = fieldDef.label;
+        const input = document.createElement('input');
+        input.id = getTextDomId(slot.slot, fieldDef.field);
+        input.name = fieldDef.name;
+        input.type = fieldDef.type;
+        input.value = fieldDef.value;
+        if (fieldDef.min) input.min = fieldDef.min;
+        field.appendChild(label);
+        field.appendChild(input);
+        sizeColorRow.appendChild(field);
+      });
+
+      const positionRow = document.createElement('div');
+      positionRow.className = 'row row--2';
+      [
+        { label: 'X', field: 'x', name: `${slot.key}_x`, value: slot.defaultX },
+        { label: 'Y', field: 'y', name: `${slot.key}_y`, value: slot.defaultY },
+      ].forEach((fieldDef) => {
+        const field = document.createElement('div');
+        field.className = 'field';
+        const label = document.createElement('label');
+        label.htmlFor = getTextDomId(slot.slot, fieldDef.field);
+        label.textContent = fieldDef.label;
+        const input = document.createElement('input');
+        input.id = getTextDomId(slot.slot, fieldDef.field);
+        input.name = fieldDef.name;
+        input.type = 'number';
+        input.value = fieldDef.value;
+        field.appendChild(label);
+        field.appendChild(input);
+        positionRow.appendChild(field);
+      });
+
+      const toggleRow = document.createElement('div');
+      toggleRow.className = 'toggle-row';
+      const strokeField = document.createElement('div');
+      strokeField.className = 'field';
+      const strokeLabel = document.createElement('label');
+      strokeLabel.className = 'inline-toggle';
+      strokeLabel.htmlFor = getTextDomId(slot.slot, 'stroke-enabled');
+      const strokeInput = document.createElement('input');
+      strokeInput.id = getTextDomId(slot.slot, 'stroke-enabled');
+      strokeInput.name = `${slot.key}_stroke_enabled`;
+      strokeInput.type = 'checkbox';
+      strokeInput.value = '1';
+      const strokeText = document.createElement('span');
+      strokeText.textContent = '縁取り';
+      strokeLabel.appendChild(strokeInput);
+      strokeLabel.appendChild(strokeText);
+      strokeField.appendChild(strokeLabel);
+      toggleRow.appendChild(strokeField);
+      const debugField = document.createElement('div');
+      debugField.className = 'field';
+      const debugLabel = document.createElement('label');
+      debugLabel.className = 'inline-toggle';
+      debugLabel.htmlFor = getTextDomId(slot.slot, 'debug-layout');
+      const debugInput = document.createElement('input');
+      debugInput.id = getTextDomId(slot.slot, 'debug-layout');
+      debugInput.name = `${slot.key}_debug_enabled`;
+      debugInput.type = 'checkbox';
+      debugInput.value = '1';
+      const debugText = document.createElement('span');
+      debugText.textContent = 'Debug枠';
+      debugLabel.appendChild(debugInput);
+      debugLabel.appendChild(debugText);
+      debugField.appendChild(debugLabel);
+      toggleRow.appendChild(debugField);
+
+      const strokeRow = document.createElement('div');
+      strokeRow.className = 'row row--2';
+      [
+        { label: '縁取り色', field: 'stroke-color', name: `${slot.key}_stroke_color`, type: 'color', value: '#000000' },
+        { label: '縁取り幅', field: 'stroke-width', name: `${slot.key}_stroke_width`, type: 'number', value: '2', min: '0' },
+      ].forEach((fieldDef) => {
+        const field = document.createElement('div');
+        field.className = 'field';
+        const label = document.createElement('label');
+        label.htmlFor = getTextDomId(slot.slot, fieldDef.field);
+        label.textContent = fieldDef.label;
+        const input = document.createElement('input');
+        input.id = getTextDomId(slot.slot, fieldDef.field);
+        input.name = fieldDef.name;
+        input.type = fieldDef.type;
+        input.value = fieldDef.value;
+        if (fieldDef.min) input.min = fieldDef.min;
+        field.appendChild(label);
+        field.appendChild(input);
+        strokeRow.appendChild(field);
+      });
+
+      body.appendChild(textField);
+      body.appendChild(fontField);
+      body.appendChild(sizeColorRow);
+      body.appendChild(positionRow);
+      body.appendChild(toggleRow);
+      body.appendChild(strokeRow);
+      block.appendChild(header);
+      block.appendChild(body);
+      return block;
+    }
+
+    function bindTextSlotDomRefs(slot) {
+      slot.enabledInput = document.getElementById(getTextDomId(slot.slot, 'enabled'));
+      slot.valueInput = document.getElementById(getTextDomId(slot.slot, 'value'));
+      slot.fontInput = document.getElementById(getTextDomId(slot.slot, 'font'));
+      slot.sizeInput = document.getElementById(getTextDomId(slot.slot, 'size'));
+      slot.colorInput = document.getElementById(getTextDomId(slot.slot, 'color'));
+      slot.strokeEnabledInput = document.getElementById(getTextDomId(slot.slot, 'stroke-enabled'));
+      slot.strokeColorInput = document.getElementById(getTextDomId(slot.slot, 'stroke-color'));
+      slot.strokeWidthInput = document.getElementById(getTextDomId(slot.slot, 'stroke-width'));
+      slot.debugInput = document.getElementById(getTextDomId(slot.slot, 'debug-layout'));
+      slot.xInput = document.getElementById(getTextDomId(slot.slot, 'x'));
+      slot.yInput = document.getElementById(getTextDomId(slot.slot, 'y'));
+    }
 
     function getBubbleOverlayAsset(assetId) {
       if (!assetId) return null;
@@ -673,10 +934,11 @@
         base_image: [baseLayer],
         message_band: [messageBandLayer],
         overlay_image: [bubbleOverlayLayer, bubbleOverlayResizeHandleRight, bubbleOverlayResizeHandleBottom, bubbleDebugRect],
-        text2: [textLayer2],
-        text1: [textLayer],
       };
       characterSlots.forEach((slot) => {
+        layerMap[slot.layerId] = [slot.layer];
+      });
+      textSettingSlots.forEach((slot) => {
         layerMap[slot.layerId] = [slot.layer];
       });
       return (layerMap[layerId] || []).filter(Boolean);
@@ -739,6 +1001,7 @@
         stroke_enabled: Boolean(slot.strokeEnabledInput?.checked),
         stroke_color: slot.strokeColorInput?.value || '#000000',
         stroke_width: slot.strokeWidthInput?.value || '2',
+        debug_enabled: Boolean(slot.debugInput?.checked),
         font: slot.fontInput?.value || '',
       };
     }
@@ -781,6 +1044,9 @@
       }
       if (slot.strokeWidthInput && textState.stroke_width !== undefined) {
         slot.strokeWidthInput.value = String(textState.stroke_width);
+      }
+      if (slot.debugInput) {
+        slot.debugInput.checked = textState.debug_enabled === true;
       }
       if (slot.xInput && textState.x !== undefined) {
         slot.xInput.value = String(textState.x);
@@ -890,6 +1156,7 @@
           ...payload,
           ...buildCharacterState(slot),
         }), {}),
+        text_slot_count: textSettingSlots.length,
         canvas_size: canvasPresetSelect?.value || '',
         canvas_preset: canvasPresetSelect?.value || '',
         base_image_name: baseImageNameInput?.value || '',
@@ -902,8 +1169,10 @@
         layer_order: normalizeLayerOrder(currentLayerOrder),
         layer_order_mode: normalizeLayerOrderMode(currentLayerOrderMode),
         layer_locks: normalizeLayerLocks(currentLayerLocks),
-        text: buildTextState(textSettingSlots[0]),
-        text2: buildTextState(textSettingSlots[1]),
+        ...textSettingSlots.reduce((payload, slot) => ({
+          ...payload,
+          [slot.key]: buildTextState(slot),
+        }), {}),
         message_band: buildMessageBandState(),
         bubble_overlay: {
           enabled: Boolean(bubbleOverlayEnabledInput?.checked),
@@ -980,6 +1249,7 @@
       }
 
       syncCharacterSlotCount(getCharacterSlotCountFromState(stored));
+      syncTextSlotCount(getTextSlotCountFromState(stored));
       characterSlots.forEach((slot) => applyCharacterState(slot, stored));
       const storedCanvasPreset = stored.canvas_preset || stored.canvas_size || '';
       if (canvasPresetSelect && storedCanvasPreset && canvasPresets[storedCanvasPreset]) {
@@ -1019,9 +1289,9 @@
       updateLayerLockControls();
       applyLayerOrderToSettingsBlocks();
       applyLayerOrderToPreviewDom();
-      const text = stored.text || {};
-      applyStoredTextState(textSettingSlots[0], text, { enabledDefault: true });
-      applyStoredTextState(textSettingSlots[1], stored.text2 || {}, { enabledDefault: false });
+      textSettingSlots.forEach((slot) => {
+        applyStoredTextState(slot, stored[slot.key] || {}, { enabledDefault: slot.slot === 1 });
+      });
       const messageBand = stored.message_band || {};
       if (messageBandEnabledInput) {
         messageBandEnabledInput.checked = messageBand.enabled === true;
@@ -1377,7 +1647,8 @@
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'フォント一覧の取得に失敗しました。');
         }
-        [textFontSelect, text2FontSelect].forEach((fontSelect) => {
+        textSettingSlots.forEach((slot) => {
+          const fontSelect = slot.fontInput;
           const currentValue = fontSelect?.value || '';
           if (!fontSelect) return;
           fontSelect.innerHTML = '';
@@ -1691,7 +1962,8 @@
       content.style.lineHeight = `${(layout.text_size || 16) + (layout.line_spacing || 0)}px`;
       content.style.color = colorInput?.value || '#ffffff';
       content.style.textShadow = strokeEnabledInput?.checked ? buildPreviewTextShadow(layout.stroke_width || 0, strokeColorInput?.value || '#000000') : 'none';
-      content.style.fontFamily = fontInput?.value ? `"${buildPreviewFontFamily(fontInput.value)}", sans-serif` : '';
+      const previewFontName = layout.resolved_font || fontInput?.value || '';
+      content.style.fontFamily = previewFontName ? `"${buildPreviewFontFamily(previewFontName)}", sans-serif` : '';
       content.style.textAlign = layout.text_align || 'left';
       if (textBoxRect) {
         setDebugRect(debugRect, textBoxRect, debugVisible, layerLeft, layerTop);
@@ -1738,7 +2010,7 @@
     }
 
     function renderScenePreviewLayers() {
-      if (!previewCanvas || !sceneStage || !sceneEmpty || !baseLayer || !textLayer) return;
+      if (!previewCanvas || !sceneStage || !sceneEmpty || !baseLayer) return;
       applyLayerOrderToPreviewDom();
 
       const { previewWidth, previewHeight } = getCurrentCanvasSize();
@@ -1773,7 +2045,7 @@
         setLayerRect(slot.layer, left, top, width, height);
       });
 
-      const debugVisible = Boolean(textDebugLayoutInput?.checked);
+      const bubbleDebugVisible = textSettingSlots.some((slot) => Boolean(slot.debugInput?.checked));
       const bubbleOverlayLayout = bubbleOverlayEnabledInput?.checked ? latestPreviewLayout?.bubble_overlay || null : null;
       if (bubbleOverlayLayout && bubbleOverlayLayer) {
         const bubbleAsset = bubbleOverlayLayout.source_type === 'asset'
@@ -1801,7 +2073,7 @@
           bubbleOverlayResizeHandleRight?.classList.add('is-visible');
           bubbleOverlayResizeHandleBottom?.classList.add('is-visible');
           setOverlayResizeHandlePosition(overlayLeft, overlayTop, overlayWidth, overlayHeight);
-          setDebugRect(bubbleDebugRect, bubbleOverlayLayout, debugVisible);
+          setDebugRect(bubbleDebugRect, bubbleOverlayLayout, bubbleDebugVisible);
         } else {
           bubbleOverlayLayer.removeAttribute('src');
           bubbleOverlayLayer.classList.add('is-hidden');
@@ -1821,29 +2093,19 @@
         setDebugRect(bubbleDebugRect, null, false);
       }
 
-      renderTextPreviewLayer({
-        layout: text2EnabledInput?.checked ? latestPreviewLayout?.text2 || null : null,
-        layer: textLayer2,
-        content: textContent2,
-        contentBox: textContentBox2,
-        debugRect: textBoxDebugRect2,
-        debugVisible,
-        colorInput: text2ColorInput,
-        strokeEnabledInput: text2StrokeEnabledInput,
-        strokeColorInput: text2StrokeColorInput,
-        fontInput: text2FontSelect,
-      });
-      renderTextPreviewLayer({
-        layout: textEnabledInput?.checked ? latestPreviewLayout?.text || null : null,
-        layer: textLayer,
-        content: textContent,
-        contentBox: textContentBox,
-        debugRect: textBoxDebugRect,
-        debugVisible,
-        colorInput: textColorInput,
-        strokeEnabledInput: textStrokeEnabledInput,
-        strokeColorInput: textStrokeColorInput,
-        fontInput: textFontSelect,
+      textSettingSlots.forEach((slot) => {
+        renderTextPreviewLayer({
+          layout: slot.enabledInput?.checked ? latestPreviewLayout?.[slot.key] || null : null,
+          layer: slot.layer,
+          content: slot.content,
+          contentBox: slot.contentBox,
+          debugRect: slot.debugRect,
+          debugVisible: Boolean(slot.debugInput?.checked),
+          colorInput: slot.colorInput,
+          strokeEnabledInput: slot.strokeEnabledInput,
+          strokeColorInput: slot.strokeColorInput,
+          fontInput: slot.fontInput,
+        });
       });
       updatePreviewViewportScale();
     }
@@ -2129,13 +2391,12 @@
         character1: 'キャラ1',
         character2: 'キャラ2',
         character3: 'キャラ3',
-        text1: 'テキスト1',
-        text2: 'テキスト2',
         message_band: 'メッセージ帯',
         overlay_image: '画像オーバーレイ',
       };
       sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
-        const label = labels[block.dataset.layerId];
+        const textMatch = String(block.dataset.layerId || '').match(/^text(\d+)$/);
+        const label = textMatch ? `テキスト${textMatch[1]}` : labels[block.dataset.layerId];
         const title = block.querySelector('.settings-block-title');
         if (label && title) {
           title.textContent = label;
@@ -2211,6 +2472,10 @@
           throw new Error(data.error || 'プレビュー更新に失敗しました。');
         }
         latestPreviewLayout = data.layout || null;
+        await Promise.all(textSettingSlots.map((slot) => {
+          const resolvedFont = latestPreviewLayout?.[slot.key]?.resolved_font || '';
+          return resolvedFont ? ensurePreviewFont(resolvedFont) : Promise.resolve();
+        }));
         renderScenePreviewLayers();
         showSceneStatus('');
         saveSceneState();
@@ -2282,19 +2547,44 @@
         latestPreviewLayout.bubble_overlay.width = Math.max(1, Math.round(Number(bubbleOverlayWidthInput?.value || 1) * previewScaleFactor));
         latestPreviewLayout.bubble_overlay.height = Math.max(1, Math.round(Number(bubbleOverlayHeightInput?.value || 1) * previewScaleFactor));
       }
-      syncTextPreviewLayoutPosition('text', textXInput, textYInput);
-      syncTextPreviewLayoutPosition('text2', text2XInput, text2YInput);
+      textSettingSlots.forEach((slot) => {
+        syncTextPreviewLayoutPosition(slot.key, slot.xInput, slot.yInput);
+      });
     }
 
     function applyImmediateTextInputUpdate(element) {
-      if (element === textValueInput && textContent) {
-        textContent.textContent = textValueInput.value || '';
-      } else if (element === text2ValueInput && textContent2) {
-        textContent2.textContent = text2ValueInput.value || '';
-      } else if (element === textSizeInput && textContent) {
-        textContent.style.fontSize = `${Number(textSizeInput.value || 32) * previewScaleFactor}px`;
-      } else if (element === text2SizeInput && textContent2) {
-        textContent2.style.fontSize = `${Number(text2SizeInput.value || 64) * previewScaleFactor}px`;
+      const slot = getTextSlotForInput(element);
+      if (!slot) return;
+      if (slot.content) {
+        slot.content.style.color = slot.colorInput?.value || '#ffffff';
+        const strokeWidth = Math.max(0, Math.round(Number(slot.strokeWidthInput?.value || 0) * previewScaleFactor));
+        slot.content.style.textShadow = slot.strokeEnabledInput?.checked
+          ? buildPreviewTextShadow(strokeWidth, slot.strokeColorInput?.value || '#000000')
+          : 'none';
+      }
+      if (element === slot.valueInput && slot.content) {
+        slot.content.textContent = slot.valueInput.value || '';
+      } else if (element === slot.sizeInput && slot.content) {
+        const textSize = Math.max(1, Math.round(Number(slot.sizeInput.value || slot.defaultSize) * previewScaleFactor));
+        const lineSpacing = Math.max(4, Math.round(textSize * 0.2));
+        slot.content.style.fontSize = `${textSize}px`;
+        slot.content.style.lineHeight = `${textSize + lineSpacing}px`;
+      }
+      updateImmediateTextLayerRect(slot);
+    }
+
+    function updateImmediateTextLayerRect(slot) {
+      if (!slot.layer || !slot.contentBox) return;
+      const contentRect = slot.content?.getBoundingClientRect();
+      const width = Math.max(1, Math.ceil(contentRect?.width || Number(slot.layer.style.width.replace('px', '')) || 1));
+      const height = Math.max(1, Math.ceil(contentRect?.height || Number(slot.layer.style.height.replace('px', '')) || 1));
+      slot.layer.style.width = `${width}px`;
+      slot.layer.style.height = `${height}px`;
+      slot.contentBox.style.width = `${width}px`;
+      slot.contentBox.style.height = `${height}px`;
+      if (slot.debugRect?.classList.contains('is-visible')) {
+        slot.debugRect.style.width = `${width}px`;
+        slot.debugRect.style.height = `${height}px`;
       }
     }
 
@@ -2343,29 +2633,12 @@
       bubbleOverlayYInput,
       bubbleOverlayWidthInput,
       bubbleOverlayHeightInput,
-      textColorInput,
-      textStrokeColorInput,
-      textXInput,
-      textYInput,
-      text2ColorInput,
-      text2StrokeColorInput,
-      text2XInput,
-      text2YInput,
       messageBandXInput,
       messageBandYInput,
       messageBandWidthInput,
       messageBandHeightInput,
       messageBandColorInput,
       messageBandOpacityInput,
-      textDebugLayoutInput,
-    ];
-    const committedPreviewInputs = [
-      textValueInput,
-      textSizeInput,
-      textStrokeWidthInput,
-      text2ValueInput,
-      text2SizeInput,
-      text2StrokeWidthInput,
     ];
     immediatePreviewInputs.forEach((element) => {
       element?.addEventListener('change', () => {
@@ -2379,33 +2652,9 @@
         applyImmediatePreviewUpdate({ portraitSlot: getCharacterSlotForLayoutInput(element) || character1SlotDef });
       });
     });
-    committedPreviewInputs.forEach((element) => {
-      element?.addEventListener('change', () => {
-        requestCommittedPreviewUpdate();
-      });
-      element?.addEventListener('input', () => {
-        applyImmediateTextInputUpdate(element);
-        saveSceneState();
-      });
-    });
 
     characterSlots.forEach(registerCharacterSlotEvents);
-    textEnabledInput?.addEventListener('change', () => {
-      updateVisibilityIcon(textEnabledInput);
-      renderScenePreviewLayers();
-      saveSceneState();
-      if (textEnabledInput.checked && !latestPreviewLayout?.text) {
-        scheduleScenePreview();
-      }
-    });
-    text2EnabledInput?.addEventListener('change', () => {
-      updateVisibilityIcon(text2EnabledInput);
-      renderScenePreviewLayers();
-      saveSceneState();
-      if (text2EnabledInput.checked && !latestPreviewLayout?.text2) {
-        scheduleScenePreview();
-      }
-    });
+    textSettingSlots.forEach(registerTextSlotEvents);
     bubbleOverlayEnabledInput?.addEventListener('change', () => {
       updateVisibilityIcon(bubbleOverlayEnabledInput);
       renderScenePreviewLayers();
@@ -2421,7 +2670,7 @@
       saveSceneState();
       scheduleScenePreview();
     });
-    [textStrokeEnabledInput, text2StrokeEnabledInput, messageBandEnabledInput].forEach((element) => {
+    [messageBandEnabledInput].forEach((element) => {
       element?.addEventListener('change', () => {
         if (element === messageBandEnabledInput) {
           updateVisibilityIcon(element);
@@ -2432,22 +2681,6 @@
           scheduleScenePreview();
         }
       });
-    });
-    textFontSelect?.addEventListener('change', async () => {
-      if (textFontSelect.value) {
-        await ensurePreviewFont(textFontSelect.value);
-      }
-      renderScenePreviewLayers();
-      saveSceneState();
-      scheduleScenePreview();
-    });
-    text2FontSelect?.addEventListener('change', async () => {
-      if (text2FontSelect.value) {
-        await ensurePreviewFont(text2FontSelect.value);
-      }
-      renderScenePreviewLayers();
-      saveSceneState();
-      scheduleScenePreview();
     });
 
     function handleCharacterSourceChange(slot) {
@@ -2503,6 +2736,76 @@
       slot.onCommit = () => savePortraitLayoutState(getCharacterPortraitLayoutKey(slot), slot);
       slot.syncPreviewLayoutPosition = () => {};
       slot.layer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(slot, event));
+      slot.layer?.addEventListener('pointermove', updatePreviewObjectDrag);
+      slot.layer?.addEventListener('pointerup', endPreviewObjectDrag);
+      slot.layer?.addEventListener('pointercancel', endPreviewObjectDrag);
+    }
+
+    function getTextSlotForInput(element) {
+      return textSettingSlots.find((slot) => (
+        element === slot.valueInput ||
+        element === slot.sizeInput ||
+        element === slot.strokeWidthInput ||
+        element === slot.colorInput ||
+        element === slot.strokeColorInput ||
+        element === slot.debugInput ||
+        element === slot.xInput ||
+        element === slot.yInput
+      )) || null;
+    }
+
+    function registerTextSlotEvents(slot) {
+      if (!slot || slot.eventsRegistered) return;
+      slot.eventsRegistered = true;
+      [slot.colorInput, slot.strokeColorInput, slot.xInput, slot.yInput].forEach((element) => {
+        element?.addEventListener('change', () => {
+          requestCommittedPreviewUpdate({ server: false });
+        });
+        element?.addEventListener('input', () => {
+          applyImmediateTextInputUpdate(element);
+          applyImmediatePreviewUpdate({ portraitSlot: character1SlotDef });
+        });
+      });
+      [slot.valueInput, slot.sizeInput, slot.strokeWidthInput].forEach((element) => {
+        element?.addEventListener('change', () => {
+          requestCommittedPreviewUpdate();
+        });
+        element?.addEventListener('input', () => {
+          applyImmediateTextInputUpdate(element);
+          saveSceneState();
+          if (element !== slot.sizeInput) {
+            scheduleScenePreview();
+          }
+        });
+      });
+      slot.enabledInput?.addEventListener('change', () => {
+        updateVisibilityIcon(slot.enabledInput);
+        renderScenePreviewLayers();
+        saveSceneState();
+        if (slot.enabledInput.checked) {
+          scheduleScenePreview();
+        }
+      });
+      slot.strokeEnabledInput?.addEventListener('change', () => {
+        applyImmediateTextInputUpdate(slot.strokeEnabledInput);
+        renderScenePreviewLayers();
+        saveSceneState();
+        scheduleScenePreview();
+      });
+      slot.debugInput?.addEventListener('change', () => {
+        renderScenePreviewLayers();
+        saveSceneState();
+      });
+      slot.fontInput?.addEventListener('change', async () => {
+        if (slot.fontInput.value) {
+          await ensurePreviewFont(slot.fontInput.value);
+        }
+        renderScenePreviewLayers();
+        saveSceneState();
+        scheduleScenePreview();
+      });
+      const dragSlot = buildTextDragSlot(slot.key, slot.layerId, slot.xInput, slot.yInput, slot.layer);
+      slot.layer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(dragSlot, event));
       slot.layer?.addEventListener('pointermove', updatePreviewObjectDrag);
       slot.layer?.addEventListener('pointerup', endPreviewObjectDrag);
       slot.layer?.addEventListener('pointercancel', endPreviewObjectDrag);
@@ -2570,6 +2873,69 @@
       updateCharacterSlotControls();
     }
 
+    function addTextSlot({ save = true } = {}) {
+      const nextSlotNumber = Math.max(...textSettingSlots.map((slot) => slot.slot)) + 1;
+      const slot = buildTextSlot(nextSlotNumber);
+      createTextPreviewLayer(slot);
+      textSettingSlots.push(slot);
+      defaultLayerOrder.push(slot.layerId);
+      currentLayerOrder.push(slot.layerId);
+      defaultSectionOpenState[slot.layerId] = true;
+      currentLayerLocks[slot.layerId] = false;
+
+      const block = createTextSlotBlock(slot);
+      addTextSlotButton?.parentNode?.insertBefore(block, addTextSlotButton);
+      bindTextSlotDomRefs(slot);
+      registerTextSlotEvents(slot);
+      registerSectionToggle(block.querySelector('[data-settings-toggle]'));
+      applyStoredSectionOpenState(slot.layerId);
+      updateVisibilityIcon(slot.enabledInput);
+      updateLayerOrderInput();
+      initializeLayerOrderDrag();
+      initializeLayerMoveControls();
+      initializeLayerLockControls();
+      updateLayerLockControls();
+      applyLayerOrderToSettingsBlocks();
+      applyLayerOrderToPreviewDom();
+      if (save) {
+        saveSceneState();
+      }
+      updateTextSlotControls();
+    }
+
+    function removeLastTextSlot({ save = true } = {}) {
+      if (textSettingSlots.length <= minimumTextSlotCount) return;
+      const slot = textSettingSlots[textSettingSlots.length - 1];
+      const layerId = slot.layerId;
+
+      document
+        .querySelector(`.settings-block[data-layer-id="${layerId}"]`)
+        ?.remove();
+      slot.layer?.remove();
+      textSettingSlots.pop();
+
+      const defaultIndex = defaultLayerOrder.indexOf(layerId);
+      if (defaultIndex >= 0) {
+        defaultLayerOrder.splice(defaultIndex, 1);
+      }
+      currentLayerOrder = currentLayerOrder.filter((id) => id !== layerId);
+      delete currentLayerLocks[layerId];
+      delete defaultSectionOpenState[layerId];
+      if (latestPreviewLayout) {
+        delete latestPreviewLayout[slot.key];
+      }
+
+      updateLayerOrderInput();
+      updateLayerLockControls();
+      applyLayerOrderToPreviewDom();
+      renderScenePreviewLayers();
+      if (save) {
+        saveSceneState();
+        scheduleScenePreview();
+      }
+      updateTextSlotControls();
+    }
+
     baseImageInput?.addEventListener('change', async () => {
       const baseFile = baseImageInput.files?.[0];
       if (!baseFile) return;
@@ -2603,6 +2969,8 @@
     });
     addCharacterSlotButton?.addEventListener('click', () => addCharacterSlot());
     removeCharacterSlotButton?.addEventListener('click', () => removeLastCharacterSlot());
+    addTextSlotButton?.addEventListener('click', () => addTextSlot());
+    removeTextSlotButton?.addEventListener('click', () => removeLastTextSlot());
     baseLayer?.addEventListener('load', renderScenePreviewLayers);
     bubbleOverlayLayer?.addEventListener('load', renderScenePreviewLayers);
     window.addEventListener('resize', renderScenePreviewLayers);
@@ -2628,8 +2996,6 @@
         },
       };
     }
-    const textDragSlot = buildTextDragSlot('text', 'text1', textXInput, textYInput, textLayer);
-    const text2DragSlot = buildTextDragSlot('text2', 'text2', text2XInput, text2YInput, textLayer2);
     const overlayDragTarget = {
       slot: 'overlay',
       layerId: 'overlay_image',
@@ -2650,14 +3016,6 @@
         bubbleOverlayLayout.height = Math.round(height * previewScaleFactor);
       },
     };
-    textLayer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(textDragSlot, event));
-    textLayer?.addEventListener('pointermove', updatePreviewObjectDrag);
-    textLayer?.addEventListener('pointerup', endPreviewObjectDrag);
-    textLayer?.addEventListener('pointercancel', endPreviewObjectDrag);
-    textLayer2?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(text2DragSlot, event));
-    textLayer2?.addEventListener('pointermove', updatePreviewObjectDrag);
-    textLayer2?.addEventListener('pointerup', endPreviewObjectDrag);
-    textLayer2?.addEventListener('pointercancel', endPreviewObjectDrag);
     bubbleOverlayLayer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(overlayDragTarget, event));
     bubbleOverlayLayer?.addEventListener('pointermove', updatePreviewObjectDrag);
     bubbleOverlayLayer?.addEventListener('pointerup', endPreviewObjectDrag);
@@ -2687,18 +3045,13 @@
       initializeSectionToggles();
       await loadFontOptions();
       applyStoredSceneState();
-      if (textFontSelect?.value) {
-        try {
-          await ensurePreviewFont(textFontSelect.value);
-        } catch {
-          // Server-rendered preview still uses the selected font when available.
-        }
-      }
-      if (text2FontSelect?.value) {
-        try {
-          await ensurePreviewFont(text2FontSelect.value);
-        } catch {
-          // Server-rendered preview still uses the selected font when available.
+      for (const slot of textSettingSlots) {
+        if (slot.fontInput?.value) {
+          try {
+            await ensurePreviewFont(slot.fontInput.value);
+          } catch {
+            // Server-rendered preview still uses the selected font when available.
+          }
         }
       }
       await restoreIndexedDbBaseImage();
@@ -2709,6 +3062,7 @@
       updateCurrentSourceLabel();
       updateBaseImageSourceLabel();
       updateCharacterSlotControls();
+      updateTextSlotControls();
       saveSceneState();
     }
 

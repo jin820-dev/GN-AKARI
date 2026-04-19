@@ -34,6 +34,7 @@
         <input type="hidden" id="portrait-filename" name="portrait_filename" value="{{ selected_portrait_filename or '' }}">
         <input type="hidden" id="character2-portrait-filename" name="character2_portrait_filename" value="">
         <input type="hidden" id="character3-portrait-filename" name="character3_portrait_filename" value="">
+        <input type="hidden" id="text-slot-count" name="text_slot_count" value="2">
         <input type="hidden" id="layer-order" name="layer_order" value="">
         <input type="hidden" id="layer-order-mode" name="layer_order_mode" value="">
 
@@ -159,7 +160,7 @@
             </div>
             <div class="field">
               <label class="inline-toggle" for="text-debug-layout">
-                <input id="text-debug-layout" type="checkbox" value="1">
+                <input id="text-debug-layout" name="text_debug_enabled" type="checkbox" value="1">
                 <span>Debug枠</span>
               </label>
             </div>
@@ -228,6 +229,12 @@
                 <span>縁取り</span>
               </label>
             </div>
+            <div class="field">
+              <label class="inline-toggle" for="text2-debug-layout">
+                <input id="text2-debug-layout" name="text2_debug_enabled" type="checkbox" value="1">
+                <span>Debug枠</span>
+              </label>
+            </div>
           </div>
           <div class="row row--2">
             <div class="field">
@@ -241,6 +248,9 @@
           </div>
           </div>
         </div>
+
+        <button type="button" id="add-text-slot">テキスト追加</button>
+        <button type="button" id="remove-text-slot">最後のテキスト削除</button>
 
         <div class="settings-block" data-section-key="message-band" data-layer-id="message_band">
           <button type="button" class="settings-block-header" data-settings-toggle="message-band" aria-expanded="true">

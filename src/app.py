@@ -6,7 +6,9 @@ import hashlib
 import re
 import secrets
 import shutil
+import struct
 from datetime import datetime
+from functools import lru_cache
 from io import BytesIO
 import subprocess
 import sys
@@ -67,6 +69,7 @@ SCENE_PREVIEW_SCALE = 0.5
 DEFAULT_SCENE_LAYER_ORDER = ["base_image", "message_band", "character1", "character2", "character3", "overlay_image", "text2", "text1"]
 DEFAULT_SCENE_LAYER_ORDER_MODE = "aviutl"
 SCENE_CHARACTER_LAYER_RE = re.compile(r"^character(\d+)$")
+SCENE_TEXT_LAYER_RE = re.compile(r"^text(\d+)$")
 
 app = Flask(__name__, template_folder=str(ROOT_DIR / "templates"))
 app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
@@ -271,6 +274,167 @@ def resolve_font_file_path(filename: str) -> Path:
     candidate = (DATA_FONT_DIR / safe_name).resolve()
     candidate.relative_to(DATA_FONT_DIR.resolve())
     return candidate
+
+
+def read_uint16(data: bytes, offset: int) -> int:
+    return struct.unpack_from(">H", data, offset)[0]
+
+
+def read_int16(data: bytes, offset: int) -> int:
+    return struct.unpack_from(">h", data, offset)[0]
+
+
+def read_uint32(data: bytes, offset: int) -> int:
+    return struct.unpack_from(">I", data, offset)[0]
+
+
+def get_font_table(data: bytes, tag: bytes) -> bytes | None:
+    sfnt_offset = 0
+    if data[:4] == b"ttcf":
+        if len(data) < 16:
+            return None
+        sfnt_offset = read_uint32(data, 12)
+    if len(data) < sfnt_offset + 12:
+        return None
+
+    table_count = read_uint16(data, sfnt_offset + 4)
+    table_dir = sfnt_offset + 12
+    for index in range(table_count):
+        record_offset = table_dir + index * 16
+        if len(data) < record_offset + 16:
+            return None
+        if data[record_offset:record_offset + 4] != tag:
+            continue
+        table_offset = read_uint32(data, record_offset + 8)
+        table_length = read_uint32(data, record_offset + 12)
+        if len(data) < table_offset + table_length:
+            return None
+        return data[table_offset:table_offset + table_length]
+    return None
+
+
+def cmap_format4_has_codepoint(table: bytes, offset: int, codepoint: int) -> bool:
+    if codepoint > 0xFFFF or len(table) < offset + 16:
+        return False
+    length = read_uint16(table, offset + 2)
+    if len(table) < offset + length:
+        return False
+    seg_count = read_uint16(table, offset + 6) // 2
+    end_codes = offset + 14
+    start_codes = end_codes + seg_count * 2 + 2
+    id_deltas = start_codes + seg_count * 2
+    id_range_offsets = id_deltas + seg_count * 2
+    for index in range(seg_count):
+        end_code = read_uint16(table, end_codes + index * 2)
+        start_code = read_uint16(table, start_codes + index * 2)
+        if not start_code <= codepoint <= end_code:
+            continue
+        id_delta = read_int16(table, id_deltas + index * 2)
+        range_offset_pos = id_range_offsets + index * 2
+        range_offset = read_uint16(table, range_offset_pos)
+        if range_offset == 0:
+            return ((codepoint + id_delta) % 65536) != 0
+        glyph_offset = range_offset_pos + range_offset + (codepoint - start_code) * 2
+        if glyph_offset + 2 > offset + length:
+            return False
+        glyph_id = read_uint16(table, glyph_offset)
+        return glyph_id != 0 and ((glyph_id + id_delta) % 65536) != 0
+    return False
+
+
+def cmap_format12_has_codepoint(table: bytes, offset: int, codepoint: int) -> bool:
+    if len(table) < offset + 16:
+        return False
+    length = read_uint32(table, offset + 4)
+    if len(table) < offset + length:
+        return False
+    group_count = read_uint32(table, offset + 12)
+    groups_offset = offset + 16
+    for index in range(group_count):
+        group_offset = groups_offset + index * 12
+        if group_offset + 12 > offset + length:
+            return False
+        start_code = read_uint32(table, group_offset)
+        end_code = read_uint32(table, group_offset + 4)
+        start_glyph = read_uint32(table, group_offset + 8)
+        if start_code <= codepoint <= end_code:
+            return start_glyph + (codepoint - start_code) != 0
+    return False
+
+
+@lru_cache(maxsize=128)
+def font_has_codepoints(font_path: str, codepoints: tuple[int, ...]) -> bool:
+    try:
+        data = Path(font_path).read_bytes()
+        cmap = get_font_table(data, b"cmap")
+        if cmap is None or len(cmap) < 4:
+            return False
+        subtable_count = read_uint16(cmap, 2)
+        subtables = []
+        for index in range(subtable_count):
+            record_offset = 4 + index * 8
+            if len(cmap) < record_offset + 8:
+                continue
+            platform_id = read_uint16(cmap, record_offset)
+            encoding_id = read_uint16(cmap, record_offset + 2)
+            subtable_offset = read_uint32(cmap, record_offset + 4)
+            if len(cmap) < subtable_offset + 2:
+                continue
+            format_id = read_uint16(cmap, subtable_offset)
+            priority = 0 if (platform_id, encoding_id) in {(3, 10), (0, 4)} else 1
+            subtables.append((priority, format_id, subtable_offset))
+        for _, format_id, subtable_offset in sorted(subtables):
+            if format_id not in {4, 12}:
+                continue
+            if all(
+                cmap_format12_has_codepoint(cmap, subtable_offset, codepoint)
+                if format_id == 12
+                else cmap_format4_has_codepoint(cmap, subtable_offset, codepoint)
+                for codepoint in codepoints
+            ):
+                return True
+    except (OSError, struct.error, ValueError):
+        return False
+    return False
+
+
+def text_codepoints_requiring_font_support(text_value: str) -> tuple[int, ...]:
+    return tuple(sorted({ord(ch) for ch in text_value if not ch.isspace()}))
+
+
+def iter_scene_text_font_candidates(preferred_font_path: Path | None = None):
+    seen = set()
+    if preferred_font_path is not None:
+        resolved = preferred_font_path.resolve()
+        seen.add(resolved)
+        yield resolved
+    if DATA_FONT_DIR.exists():
+        for path in sorted(DATA_FONT_DIR.iterdir()):
+            if path.is_file() and path.suffix.lower() in ALLOWED_FONT_EXTENSIONS:
+                resolved = path.resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    yield resolved
+
+
+def resolve_scene_text_font_path(text: dict) -> Path | None:
+    codepoints = text_codepoints_requiring_font_support(text["value"])
+    if not codepoints:
+        return text["font_path"]
+    for font_path in iter_scene_text_font_candidates(text["font_path"]):
+        if font_has_codepoints(str(font_path), codepoints):
+            return font_path
+    return text["font_path"]
+
+
+def load_scene_text_font(text: dict, text_size: int, font_path: Path | None = None):
+    font_path = font_path if font_path is not None else resolve_scene_text_font_path(text)
+    if font_path is not None:
+        return ImageFont.truetype(str(font_path), text_size)
+    try:
+        return ImageFont.load_default(text_size)
+    except TypeError:
+        return ImageFont.load_default()
 
 
 def list_font_file_items() -> list[dict]:
@@ -1156,6 +1320,46 @@ def load_scene_text_input(prefix: str = "text") -> dict:
     }
 
 
+def load_scene_text_slot_numbers() -> list[int]:
+    slots = {1, 2}
+    try:
+        slot_count = int(request.form.get("text_slot_count") or "0")
+    except ValueError:
+        slot_count = 0
+    if slot_count > 0:
+        return list(range(1, slot_count + 1))
+
+    raw_order = request.form.get("layer_order") or ""
+    try:
+        parsed_order = json.loads(raw_order)
+    except json.JSONDecodeError:
+        parsed_order = raw_order.split(",")
+    if isinstance(parsed_order, list):
+        for layer_id in parsed_order:
+            match = SCENE_TEXT_LAYER_RE.match(str(layer_id))
+            if match:
+                slots.add(int(match.group(1)))
+
+    for key in request.form.keys():
+        match = re.match(r"^text(\d+)_", key)
+        if match:
+            slots.add(int(match.group(1)))
+
+    return sorted(slot for slot in slots if slot >= 1)
+
+
+def load_scene_text_inputs() -> list[dict]:
+    texts = []
+    for slot_number in load_scene_text_slot_numbers():
+        prefix = "text" if slot_number == 1 else f"text{slot_number}"
+        text = load_scene_text_input(prefix)
+        text["slot"] = slot_number
+        text["layer_id"] = f"text{slot_number}"
+        text["state_key"] = prefix
+        texts.append(text)
+    return texts
+
+
 def load_scene_bubble_overlay_input() -> dict:
     enabled_raw = request.form.get("bubble_overlay_enabled")
     enabled = enabled_raw in {"1", "true", "on"}
@@ -1256,13 +1460,8 @@ def build_scene_text_layout(
 
     text_size = max(1, round(text["size"] * position_scale))
     stroke_width = max(0, round(text["stroke_width"] * position_scale))
-    if text["font_path"] is not None:
-        font = ImageFont.truetype(str(text["font_path"]), text_size)
-    else:
-        try:
-            font = ImageFont.load_default(text_size)
-        except TypeError:
-            font = ImageFont.load_default()
+    resolved_font_path = resolve_scene_text_font_path(text)
+    font = load_scene_text_font(text, text_size, resolved_font_path)
 
     spacing = max(4, round(text_size * 0.2))
     stroke_for_text = stroke_width if text["stroke_enabled"] else 0
@@ -1297,6 +1496,7 @@ def build_scene_text_layout(
         "text_size": text_size,
         "line_spacing": spacing,
         "stroke_width": stroke_for_text,
+        "resolved_font": resolved_font_path.name if resolved_font_path is not None else "",
     }
 
 
@@ -1369,6 +1569,7 @@ def normalize_scene_layer_order(raw_order) -> list[str]:
             if (
                 layer_id in DEFAULT_SCENE_LAYER_ORDER
                 or SCENE_CHARACTER_LAYER_RE.match(layer_id)
+                or SCENE_TEXT_LAYER_RE.match(layer_id)
             ) and layer_id not in normalized:
                 normalized.append(layer_id)
     for layer_id in DEFAULT_SCENE_LAYER_ORDER:
@@ -1412,7 +1613,7 @@ def draw_message_band(result: Image.Image, message_band: dict, position_scale: f
 
 
 def draw_scene_text(result: Image.Image, text: dict, position_scale: float) -> None:
-    if not text["enabled"] or not text["value"]:
+    if text is None or not text["enabled"] or not text["value"]:
         return
 
     draw = ImageDraw.Draw(result)
@@ -1420,13 +1621,9 @@ def draw_scene_text(result: Image.Image, text: dict, position_scale: float) -> N
     if text_layout is None:
         return
 
-    if text["font_path"] is not None:
-        font = ImageFont.truetype(str(text["font_path"]), text_layout["text_size"])
-    else:
-        try:
-            font = ImageFont.load_default(text_layout["text_size"])
-        except TypeError:
-            font = ImageFont.load_default()
+    resolved_font_name = text_layout.get("resolved_font") or ""
+    resolved_font_path = resolve_font_file_path(resolved_font_name) if resolved_font_name else None
+    font = load_scene_text_font(text, text_layout["text_size"], resolved_font_path)
     draw.multiline_text(
         (text_layout["text_origin"]["x"], text_layout["text_origin"]["y"]),
         text_layout["wrapped_text"],
@@ -1439,7 +1636,7 @@ def draw_scene_text(result: Image.Image, text: dict, position_scale: float) -> N
     )
 
 
-def load_scene_inputs() -> tuple[Image.Image, list[dict], dict, dict, dict, dict, list[str], str, str, str, str, int, int, int]:
+def load_scene_inputs() -> tuple[Image.Image, list[dict], list[dict], dict, dict, list[str], str, str, str, str, int, int, int]:
     base_image = request.files.get("base_image")
     base_image_name = (request.form.get("base_image_name") or "").strip()
     canvas_preset = (request.form.get("canvas_preset") or "").strip()
@@ -1487,14 +1684,13 @@ def load_scene_inputs() -> tuple[Image.Image, list[dict], dict, dict, dict, dict
     if not active_characters:
         raise ValueError("at least one character must be enabled.")
 
-    text = load_scene_text_input("text")
-    text2 = load_scene_text_input("text2")
+    texts = load_scene_text_inputs()
     message_band = load_message_band_input()
     bubble_overlay = load_scene_bubble_overlay_input()
     layer_order = load_scene_layer_order()
     layer_order_mode = load_scene_layer_order_mode()
     preview_stem = "scene"
-    return base, active_characters, text, text2, message_band, bubble_overlay, layer_order, layer_order_mode, preview_stem, canvas_preset, base_fit_mode, base_scale, base_x, base_y
+    return base, active_characters, texts, message_band, bubble_overlay, layer_order, layer_order_mode, preview_stem, canvas_preset, base_fit_mode, base_scale, base_x, base_y
 
 
 def fit_image_to_canvas(
@@ -1544,8 +1740,7 @@ def build_canvas_size(canvas_preset: str, preview: bool) -> tuple[int, int]:
 def compose_scene(
     base: Image.Image,
     characters: list[dict],
-    text: dict,
-    text2: dict,
+    texts: list[dict],
     message_band: dict,
     bubble_overlay: dict,
     layer_order: list[str],
@@ -1571,6 +1766,7 @@ def compose_scene(
         preview=preview,
     )
     characters_by_layer = {character["layer_id"]: character for character in characters}
+    texts_by_layer = {text["layer_id"]: text for text in texts}
 
     def draw_base_layer() -> None:
         result.alpha_composite(fitted_base, base_offset)
@@ -1617,14 +1813,17 @@ def compose_scene(
         "base_image": draw_base_layer,
         "message_band": lambda: draw_message_band(result, message_band, position_scale),
         "overlay_image": draw_overlay_layer,
-        "text2": lambda: draw_scene_text(result, text2, position_scale),
-        "text1": lambda: draw_scene_text(result, text, position_scale),
     }
     for layer_id in resolve_scene_layer_draw_order(layer_order, layer_order_mode):
         if SCENE_CHARACTER_LAYER_RE.match(layer_id):
             draw_character_layer(characters_by_layer.get(layer_id))
             continue
-        draw_actions[layer_id]()
+        if SCENE_TEXT_LAYER_RE.match(layer_id):
+            draw_scene_text(result, texts_by_layer.get(layer_id), position_scale)
+            continue
+        draw_action = draw_actions.get(layer_id)
+        if draw_action is not None:
+            draw_action()
     return result
 
 
@@ -2022,8 +2221,7 @@ def scene_api():
         (
             base,
             characters,
-            text,
-            text2,
+            texts,
             message_band,
             bubble_overlay,
             layer_order,
@@ -2038,8 +2236,7 @@ def scene_api():
         result = compose_scene(
             base,
             characters,
-            text,
-            text2,
+            texts,
             message_band,
             bubble_overlay,
             layer_order,
@@ -2110,8 +2307,7 @@ def scene_preview_api():
         (
             base,
             characters,
-            text,
-            text2,
+            texts,
             message_band,
             bubble_overlay,
             layer_order,
@@ -2126,8 +2322,7 @@ def scene_preview_api():
         result = compose_scene(
             base,
             characters,
-            text,
-            text2,
+            texts,
             message_band,
             bubble_overlay,
             layer_order,
@@ -2153,8 +2348,10 @@ def scene_preview_api():
                 preview_bubble_overlay_layout["height"],
             ).save(overlay_output_path)
             preview_bubble_overlay_layout["image_url"] = f"/outputs/{overlay_output_path.relative_to(OUTPUTS_DIR)}"
-        preview_text_layout = build_scene_text_layout(layout_draw, text=text, position_scale=SCENE_PREVIEW_SCALE)
-        preview_text2_layout = build_scene_text_layout(layout_draw, text=text2, position_scale=SCENE_PREVIEW_SCALE)
+        preview_text_layouts = {
+            text["state_key"]: build_scene_text_layout(layout_draw, text=text, position_scale=SCENE_PREVIEW_SCALE)
+            for text in texts
+        }
         return jsonify(
             {
                 "ok": True,
@@ -2164,8 +2361,7 @@ def scene_preview_api():
                     "message_band": preview_message_band_layout,
                     "layer_order": normalize_scene_layer_order(layer_order),
                     "layer_order_mode": normalize_scene_layer_order_mode(layer_order_mode),
-                    "text": preview_text_layout,
-                    "text2": preview_text2_layout,
+                    **preview_text_layouts,
                 },
             }
         )

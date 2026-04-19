@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from PIL import Image
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -103,6 +107,50 @@ class SmokeRouteTest(unittest.TestCase):
         try:
             self.assertEqual(response.status_code, 200)
             self.assertIn("function initializeScenePage", response.get_data(as_text=True))
+        finally:
+            response.close()
+
+    def test_scene_preview_accepts_dynamic_text_slots(self) -> None:
+        base_path = appmod.SCENE_BASE_OUTPUTS_DIR / "base.png"
+        portrait_path = appmod.PORTRAIT_OUTPUTS_DIR / "A.png"
+        font_source = ROOT_DIR / "data" / "font" / "AkazukiPOP.otf"
+        shutil.copy(font_source, appmod.DATA_FONT_DIR / font_source.name)
+        Image.new("RGBA", (64, 64), (255, 255, 255, 255)).save(base_path)
+        Image.new("RGBA", (16, 16), (255, 0, 0, 255)).save(portrait_path)
+        self.assertEqual(
+            appmod.resolve_scene_text_font_path({"value": "自宅", "font_path": None}).name,
+            font_source.name,
+        )
+
+        response = self.client.post(
+            "/api/scene_preview",
+            data={
+                "base_image_name": "base.png",
+                "canvas_preset": "16:9",
+                "base_fit_mode": "contain",
+                "character_slot_count": "1",
+                "character1_enabled": "1",
+                "portrait_filename": "A.png",
+                "text_slot_count": "3",
+                "text3_enabled": "1",
+                "text3_value": "自宅",
+                "text3_x": "10",
+                "text3_y": "20",
+                "text3_size": "32",
+                "text3_color": "#ffffff",
+                "text3_stroke_color": "#000000",
+                "text3_stroke_width": "2",
+                "layer_order": json.dumps(["base_image", "character1", "text3"]),
+            },
+        )
+
+        try:
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            self.assertIn("text3", payload["layout"])
+            self.assertIsNotNone(payload["layout"]["text3"])
+            self.assertEqual(payload["layout"]["text3"]["resolved_font"], font_source.name)
         finally:
             response.close()
 

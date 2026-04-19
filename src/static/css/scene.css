@@ -418,9 +418,9 @@ input[type="file"] {
 }
 .preview-text-content {
   width: 100%;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: break-word;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
   line-height: 1.2;
 }
 .preview-debug-rect {
