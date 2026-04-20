@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import app as appmod  # noqa: E402
+import compose as composemod  # noqa: E402
 
 
 class SmokeRouteTest(unittest.TestCase):
@@ -39,6 +40,7 @@ class SmokeRouteTest(unittest.TestCase):
             "TRASH_DIR": appmod.TRASH_DIR,
             "TRASH_INDEX_PATH": appmod.TRASH_INDEX_PATH,
         }
+        self.original_compose_root_dir = composemod.ROOT_DIR
 
         appmod.CACHE_DIR = root / "cache"
         appmod.OUTPUTS_DIR = root / "outputs"
@@ -54,6 +56,7 @@ class SmokeRouteTest(unittest.TestCase):
         appmod.SETTINGS_DATA_DIR = root / "data" / "settings"
         appmod.TRASH_DIR = root / "data" / "trash"
         appmod.TRASH_INDEX_PATH = appmod.TRASH_DIR / "trash_index.json"
+        composemod.ROOT_DIR = root
 
         for path in (
             appmod.CACHE_DIR,
@@ -76,6 +79,7 @@ class SmokeRouteTest(unittest.TestCase):
     def tearDown(self) -> None:
         for name, value in self.original_paths.items():
             setattr(appmod, name, value)
+        composemod.ROOT_DIR = self.original_compose_root_dir
         self.temp_dir.cleanup()
 
     def test_main_pages_render(self) -> None:
@@ -107,6 +111,76 @@ class SmokeRouteTest(unittest.TestCase):
         try:
             self.assertEqual(response.status_code, 200)
             self.assertIn("function initializeScenePage", response.get_data(as_text=True))
+        finally:
+            response.close()
+
+    def test_execute_compose_writes_preview_without_subprocess(self) -> None:
+        cache_key = "psd_bbbbbbbbbbbb"
+        cache_dir = appmod.CACHE_DIR / cache_key
+        layer_dir = cache_dir / "layers"
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        layers_json_path = cache_dir / "layers.json"
+        layer_path = layer_dir / "1.png"
+        Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(layer_path)
+        layers_json_path.write_text(
+            json.dumps(
+                {
+                    "psd_source": {
+                        "path": "data/psd/test.psd",
+                        "filename": "test.psd",
+                        "cache_key": cache_key,
+                    },
+                    "canvas": {"width": 4, "height": 4},
+                    "layers": [
+                        {
+                            "id": 1,
+                            "name": "layer",
+                            "type": "layer",
+                            "visible": True,
+                            "depth": 0,
+                            "parent_id": None,
+                            "cache_png": str(layer_path),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        output_image = appmod.execute_compose(layers_json_path, ["1"], "preview")
+
+        self.assertEqual(output_image, f"preview/{cache_key}.png")
+        self.assertTrue((appmod.PREVIEW_OUTPUTS_DIR / f"{cache_key}.png").exists())
+        metadata = json.loads((appmod.PREVIEW_OUTPUTS_DIR / f"{cache_key}.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["layer_ids"], [1])
+
+        response = self.client.get(f"/api/compose_status?cache_key={cache_key}")
+        try:
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["signature"], "1")
+            self.assertTrue(payload["preview_available"])
+            self.assertEqual(payload["image_url"], f"/outputs/preview/{cache_key}.png")
+        finally:
+            response.close()
+
+    def test_cached_layer_route_serves_only_layer_png(self) -> None:
+        cache_key = "psd_aaaaaaaaaaaa"
+        layer_dir = appmod.CACHE_DIR / cache_key / "layers"
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(layer_dir / "1.png")
+
+        response = self.client.get(f"/cache/{cache_key}/layers/1.png")
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, "image/png")
+        finally:
+            response.close()
+
+        response = self.client.get(f"/cache/{cache_key}/layers/../layers/1.png")
+        try:
+            self.assertEqual(response.status_code, 404)
         finally:
             response.close()
 

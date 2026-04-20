@@ -309,12 +309,21 @@ form {
   max-width: 100%;
   box-sizing: border-box;
 }
-.preview-stage img {
-  display: block;
-  max-width: 100%;
-  height: auto;
+.preview-layer-stack {
+  position: relative;
+  width: min(100%, 520px);
   border: 1px solid var(--akari-border);
   border-radius: 10px;
+  overflow: hidden;
+  background: transparent;
+}
+.preview-layer-stack img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 .is-hidden {
   display: none;

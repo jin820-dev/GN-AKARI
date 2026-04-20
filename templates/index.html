@@ -137,17 +137,29 @@
       <p id="preview-link-row" class="{% if not output_image %}is-hidden{% endif %}">
         <a id="preview-link" href="{% if output_image %}/outputs/{{ output_image }}{% endif %}" target="_blank">{{ output_image or '' }}</a>
       </p>
-      <div id="preview-empty" class="preview-empty {% if output_image %}is-hidden{% endif %}">
+      <div id="preview-empty" class="preview-empty {% if layer_preview or output_image %}is-hidden{% endif %}">
         合成結果はまだありません。
       </div>
-      <div id="preview-stage" class="preview-stage {% if not output_image %}is-hidden{% endif %}">
-        <img id="preview-image" src="{% if output_image %}/outputs/{{ output_image }}{% endif %}" alt="composited image">
+      <div id="preview-stage" class="preview-stage {% if not layer_preview and not output_image %}is-hidden{% endif %}">
+        {% if layer_preview %}
+        <div
+          id="preview-layer-stack"
+          class="preview-layer-stack"
+          style="aspect-ratio: {{ layer_preview.canvas.width }} / {{ layer_preview.canvas.height }};"
+          role="img"
+          aria-label="layer preview"
+        ></div>
+        {% else %}
+        <div id="preview-layer-stack" class="preview-layer-stack" role="img" aria-label="layer preview"></div>
+        {% endif %}
       </div>
       <div id="preview-note" class="preview-note"></div>
     </section>
   </div>
   {% endif %}
 
+  <script id="preview-data" type="application/json">{{ (layer_preview or none) | tojson }}</script>
+  <script id="reflected-layer-signature" type="application/json">{{ (reflected_layer_signature or '') | tojson }}</script>
   <script src="{{ url_for('static', filename='js/index.js') }}"></script>
   <script src="{{ url_for('static', filename='js/pwa-register.js') }}" defer></script>
 </body>

@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
-from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from bubble_assets import (
@@ -26,6 +26,12 @@ from bubble_assets import (
     load_registered_overlay_asset_records,
     rasterize_bubble_overlay_asset,
     save_registered_overlay_asset_records,
+)
+from compose import (
+    build_metadata as build_compose_metadata,
+    build_output_paths as build_compose_output_paths,
+    composite_layers as composite_cached_layers,
+    ensure_output_dirs as ensure_compose_output_dirs,
 )
 
 
@@ -1073,6 +1079,38 @@ def order_layer_ids_for_compose(layers: list[dict], selected_layer_ids: list[str
     return ordered_ids
 
 
+def build_layer_preview_payload(payload: dict) -> dict:
+    psd_source = payload["psd_source"]
+    cache_key = psd_source["cache_key"]
+    return {
+        "canvas": payload["canvas"],
+        "layers": [
+            {
+                "id": layer["id"],
+                "png_url": f"/cache/{cache_key}/layers/{layer['id']}.png",
+            }
+            for layer in payload["layers"]
+            if layer["type"] == "layer" and layer.get("cache_png")
+        ],
+    }
+
+
+def load_preview_layer_signature(cache_key: str | None) -> str:
+    if not cache_key:
+        return ""
+
+    preview_json_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.json"
+    if not preview_json_path.exists():
+        return ""
+
+    try:
+        preview_metadata = load_layers_json(preview_json_path)
+        layer_ids = [int(layer_id) for layer_id in preview_metadata.get("layer_ids", [])]
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return ""
+    return ",".join(str(layer_id) for layer_id in sorted(layer_ids))
+
+
 def sanitize_portrait_name(name: str) -> str | None:
     sanitized = re.sub(r'[\\/:*?"<>|]+', "_", name.strip())
     if sanitized.lower().endswith(".png"):
@@ -1089,26 +1127,29 @@ def execute_compose(
 ) -> str:
     payload = load_layers_json(layers_json_path)
     ordered_layer_ids = order_layer_ids_for_compose(payload["layers"], selected_layer_ids)
-    command = [
-        sys.executable,
-        "src/compose.py",
-        "--layers-json",
-        str(layers_json_path),
-        "--layer-ids",
-        *ordered_layer_ids,
-        "--outputs-dir",
-        str(OUTPUTS_DIR),
-        "--output-kind",
-        output_kind,
-    ]
-    if output_name:
-        command.extend(["--output-name", output_name])
-    result = run_command(command)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "compose.py failed.")
+    ordered_layer_id_numbers = [int(layer_id) for layer_id in ordered_layer_ids]
 
-    output_png = Path(extract_output_value(result.stdout, "output png: "))
-    return str(output_png.relative_to(OUTPUTS_DIR))
+    try:
+        ensure_compose_output_dirs(OUTPUTS_DIR)
+        image, payload = composite_cached_layers(layers_json_path, ordered_layer_id_numbers)
+        cache_key = payload["psd_source"]["cache_key"]
+        output_png_path, output_json_path, created_at = build_compose_output_paths(
+            OUTPUTS_DIR,
+            output_kind,
+            cache_key,
+            output_name,
+        )
+        image.save(output_png_path)
+        if output_json_path is not None:
+            metadata = build_compose_metadata(payload, layers_json_path, ordered_layer_id_numbers, created_at)
+            output_json_path.write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+    except (KeyError, OSError) as exc:
+        raise RuntimeError(str(exc) or "compose.py failed.") from exc
+
+    return str(output_png_path.relative_to(OUTPUTS_DIR))
 
 
 def render_portrait_page(
@@ -1117,6 +1158,7 @@ def render_portrait_page(
     layers_json: str | None = None,
     cache_key: str | None = None,
     layer_tree: list[dict] | None = None,
+    layer_preview: dict | None = None,
     selected_layer_ids: list[str] | None = None,
     output_image: str | None = None,
     error_message: str | None = None,
@@ -1128,6 +1170,8 @@ def render_portrait_page(
         layers_json=layers_json,
         cache_key=cache_key,
         layer_tree=layer_tree or [],
+        layer_preview=layer_preview,
+        reflected_layer_signature=load_preview_layer_signature(cache_key),
         selected_layer_ids=selected_layer_ids or [],
         output_image=output_image,
         error_message=error_message,
@@ -2119,6 +2163,7 @@ def load_psd():
             layers_json=str(layers_json_path.relative_to(ROOT_DIR)),
             cache_key=payload["psd_source"]["cache_key"],
             layer_tree=build_layer_tree(payload["layers"]),
+            layer_preview=build_layer_preview_payload(payload),
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         return render_portrait_page(selected_psd=selected_psd, error_message=str(exc))
@@ -2140,6 +2185,7 @@ def compose():
                 layers_json=layers_json,
                 cache_key=payload["psd_source"]["cache_key"],
                 layer_tree=build_layer_tree(payload["layers"]),
+                layer_preview=build_layer_preview_payload(payload),
                 error_message="合成するレイヤーを1つ以上選択してください。",
             )
         except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
@@ -2158,6 +2204,7 @@ def compose():
             layers_json=layers_json,
             cache_key=payload["psd_source"]["cache_key"],
             layer_tree=build_layer_tree(payload["layers"]),
+            layer_preview=build_layer_preview_payload(payload),
             selected_layer_ids=selected_layer_ids,
             output_image=output_image,
         )
@@ -2187,9 +2234,49 @@ def compose_api():
             raise ValueError("checked_ids must contain at least one layer id.")
 
         layers_json_path = ROOT_DIR / "cache" / cache_key / "layers.json"
+        payload = load_layers_json(layers_json_path)
+        ordered_layer_ids = order_layer_ids_for_compose(payload["layers"], selected_layer_ids)
+        preview_png_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.png"
+        preview_json_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.json"
+        if preview_png_path.exists() and preview_json_path.exists():
+            try:
+                preview_metadata = load_layers_json(preview_json_path)
+                previous_layer_ids = [str(int(layer_id)) for layer_id in preview_metadata.get("layer_ids", [])]
+                if previous_layer_ids == ordered_layer_ids:
+                    return jsonify(
+                        {
+                            "ok": True,
+                            "image_url": f"/outputs/{preview_png_path.relative_to(OUTPUTS_DIR)}",
+                        }
+                    )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+
         output_image = execute_compose(layers_json_path, selected_layer_ids, "preview")
         return jsonify({"ok": True, "image_url": f"/outputs/{output_image}"})
     except (FileNotFoundError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/api/compose_status")
+def compose_status_api():
+    try:
+        cache_key = (request.args.get("cache_key") or "").strip()
+        if not re.fullmatch(r"psd_[0-9a-f]{12}", cache_key):
+            raise ValueError("cache_key is invalid.")
+
+        preview_png_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.png"
+        signature = load_preview_layer_signature(cache_key)
+        return jsonify(
+            {
+                "ok": True,
+                "cache_key": cache_key,
+                "signature": signature,
+                "preview_available": preview_png_path.exists(),
+                "image_url": f"/outputs/{preview_png_path.relative_to(OUTPUTS_DIR)}" if preview_png_path.exists() else "",
+            }
+        )
+    except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 
@@ -2386,6 +2473,18 @@ def legacy_scene_preview_api():
 @app.get("/outputs/<path:filename>")
 def output_file(filename: str):
     return send_from_directory(OUTPUTS_DIR, filename)
+
+
+@app.get("/cache/<cache_key>/layers/<path:filename>")
+def cached_layer_file(cache_key: str, filename: str):
+    if not re.fullmatch(r"psd_[0-9a-f]{12}", cache_key):
+        abort(404)
+
+    safe_filename = Path(filename).name
+    if filename != safe_filename or Path(safe_filename).suffix.lower() != ".png":
+        abort(404)
+
+    return send_from_directory(CACHE_DIR / cache_key / "layers", safe_filename)
 
 
 @app.get("/data/src/<path:filename>")

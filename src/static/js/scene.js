@@ -13,6 +13,7 @@
     const portraitLayoutStorageKey = 'gn_akari_scene_portrait_layouts';
     const sceneUiStateStorageKey = 'gn_akari_scene_ui_state';
     const layerOrderModeStorageKey = 'gn_akari_layer_order_mode';
+    const pendingComposeReflectKey = 'gn_akari_pending_compose_reflect';
     const sceneBaseImageDbName = 'gn_akari_scene_state_db';
     const sceneBaseImageStoreName = 'scene_base_image_store';
     const sceneBaseImageRecordKey = 'latest';
@@ -1606,6 +1607,121 @@
       return '';
     }
 
+    function loadPendingComposeReflect() {
+      try {
+        const raw = sessionStorage.getItem(pendingComposeReflectKey);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.cache_key !== 'string' || typeof parsed.signature !== 'string') {
+          return null;
+        }
+        return parsed;
+      } catch {
+        return null;
+      }
+    }
+
+    function buildComposeFollowSlotDebugState(slot) {
+      return {
+        slot: slot.slot,
+        enabled: slot.enabledInput?.checked,
+        cacheKey: slot.cacheKeyInput?.value,
+        portrait: slot.portraitFilenameInput?.value,
+        layerSrc: slot.layer?.src,
+      };
+    }
+
+    function refreshPreviewPortraitForCache(cacheKey) {
+      const matchedSlots = characterSlots
+        .filter((slot) => slot.cacheKeyInput?.value === cacheKey)
+        .map((slot) => ({
+          slot: slot.slot,
+          cacheKey: slot.cacheKeyInput?.value,
+          portrait: slot.portraitFilenameInput?.value,
+          beforeSrc: slot.layer?.src,
+        }));
+      console.debug('[compose-follow] refresh target', {
+        cacheKey,
+        matchedSlots,
+      });
+
+      let didRefresh = false;
+      characterSlots.forEach((slot) => {
+        if (slot.cacheKeyInput?.value !== cacheKey) return;
+        console.debug('[compose-follow] refresh before normalize', buildComposeFollowSlotDebugState(slot));
+        slot.cacheKeyInput.value = cacheKey;
+        normalizeCharacterSourceState(slot, 'preview');
+        console.debug('[compose-follow] refresh after normalize', buildComposeFollowSlotDebugState(slot));
+        didRefresh = true;
+      });
+      if (!didRefresh) {
+        console.debug('[compose-follow] refresh skipped: no matched slot', { cacheKey });
+        return;
+      }
+      console.debug('[compose-follow] before updatePreviewSources', {
+        cacheKey,
+        slots: characterSlots.map(buildComposeFollowSlotDebugState),
+      });
+      updatePreviewSources();
+      console.debug('[compose-follow] after updatePreviewSources', {
+        cacheKey,
+        slots: characterSlots.map(buildComposeFollowSlotDebugState),
+      });
+      renderScenePreviewLayers();
+      console.debug('[compose-follow] after renderScenePreviewLayers', {
+        cacheKey,
+        slots: characterSlots.map(buildComposeFollowSlotDebugState),
+      });
+    }
+
+    async function followPendingComposeReflect() {
+      const pending = loadPendingComposeReflect();
+      if (!pending) return;
+      console.debug('[compose-follow] pending', pending);
+      if (!characterSlots.some((slot) => slot.cacheKeyInput?.value === pending.cache_key)) {
+        console.debug('[compose-follow] no matching slot for pending cache_key', {
+          pending,
+          slots: characterSlots.map(buildComposeFollowSlotDebugState),
+        });
+        sessionStorage.removeItem(pendingComposeReflectKey);
+        return;
+      }
+
+      const maxAttempts = 8;
+      const intervalMs = 350;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          const response = await fetch(`/api/compose_status?cache_key=${encodeURIComponent(pending.cache_key)}`, {
+            cache: 'no-store',
+          });
+          const data = await response.json();
+          console.debug('[compose-follow] poll', {
+            pending,
+            serverSignature: data.signature,
+            matched: data.signature === pending.signature,
+            imageUrl: data.image_url,
+            previewAvailable: data.preview_available,
+            ok: data.ok,
+            responseOk: response.ok,
+          });
+          if (response.ok && data.ok && data.preview_available && data.signature === pending.signature) {
+            console.debug('[compose-follow] slots', characterSlots.map(buildComposeFollowSlotDebugState));
+            refreshPreviewPortraitForCache(pending.cache_key);
+            sessionStorage.removeItem(pendingComposeReflectKey);
+            return;
+          }
+        } catch (error) {
+          console.debug('[compose-follow] poll error', {
+            pending,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          // Best-effort follow-up; scene preview remains usable if polling fails.
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+      sessionStorage.removeItem(pendingComposeReflectKey);
+    }
+
     function showSceneStatus(message, state = '') {
       if (!sceneStatus) return;
       sceneStatus.textContent = message;
@@ -1979,6 +2095,14 @@
 
       characterSlots.forEach((slot) => {
         const activePortraitUrl = getCharacterActiveUrl(slot);
+        if (loadPendingComposeReflect()) {
+          console.debug('[preview-source]', {
+            slot: slot.slot,
+            cacheKey: slot.cacheKeyInput?.value,
+            portrait: slot.portraitFilenameInput?.value,
+            activePortraitUrl,
+          });
+        }
         if (slot.layer && activePortraitUrl) {
           slot.layer.src = `${activePortraitUrl}?t=${Date.now()}`;
           slot.layer.classList.remove('is-hidden');
@@ -3243,6 +3367,7 @@
       updatePreviewSources();
       renderScenePreviewLayers();
       await runInitialScenePreview();
+      followPendingComposeReflect();
       updateCurrentSourceLabel();
       updateBaseImageSourceLabel();
       updateCharacterSlotControls();

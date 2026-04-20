@@ -4,6 +4,7 @@ const storageKey = cacheKey ? `gn_akari_state_${cacheKey}` : null;
 const presetsKey = cacheKey ? `gn_akari_presets_${cacheKey}` : null;
 const portraitStateKey = 'gn_akari_portrait_state';
 const portraitRestorePendingKey = 'gn_akari_portrait_restore_pending';
+const pendingComposeReflectKey = 'gn_akari_pending_compose_reflect';
 const presetStatus = document.getElementById('preset-status');
 const presetList = document.getElementById('preset-list');
 const presetNameInput = document.getElementById('preset-name');
@@ -11,8 +12,9 @@ const savePresetButton = document.getElementById('save-preset-button');
 const psdLoadForm = document.getElementById('psd-load-form');
 const psdDisplayPathSelect = document.getElementById('psd-display-path');
 const psdPathInput = document.getElementById('psd-path');
-const previewImage = document.getElementById('preview-image');
-const previewLink = document.getElementById('preview-link');
+const previewLayerStack = document.getElementById('preview-layer-stack');
+const previewDataElement = document.getElementById('preview-data');
+const reflectedLayerSignatureElement = document.getElementById('reflected-layer-signature');
 const previewLinkRow = document.getElementById('preview-link-row');
 const previewNote = document.getElementById('preview-note');
 const previewStage = document.getElementById('preview-stage');
@@ -24,9 +26,14 @@ const portraitLinkRow = document.getElementById('portrait-link-row');
 const portraitSaveNote = document.getElementById('portrait-save-note');
 let autoComposeTimer = null;
 let latestComposeRequestId = 0;
+let lastSubmittedComposeSignature = null;
+let lastReflectedComposeSignature = parseReflectedLayerSignature();
+let composeReflectLeaveHandled = false;
+let composeReflectPendingSaved = false;
 let isRestoringPortraitState = false;
 let editingPresetIndex = null;
 let editingPresetName = '';
+const previewData = parsePreviewData();
 
 function showStatus(message, isError = false) {
   if (!presetStatus) return;
@@ -75,6 +82,25 @@ function clearPortraitPageState() {
   sessionStorage.removeItem(portraitRestorePendingKey);
 }
 
+function parsePreviewData() {
+  if (!previewDataElement?.textContent) return null;
+  try {
+    return JSON.parse(previewDataElement.textContent);
+  } catch {
+    return null;
+  }
+}
+
+function parseReflectedLayerSignature() {
+  if (!reflectedLayerSignatureElement?.textContent) return '';
+  try {
+    const signature = JSON.parse(reflectedLayerSignatureElement.textContent);
+    return typeof signature === 'string' ? signature : '';
+  } catch {
+    return '';
+  }
+}
+
 function loadPresets() {
   if (!presetsKey) return { presets: [] };
   const raw = localStorage.getItem(presetsKey);
@@ -110,6 +136,10 @@ function collectCheckedLayerIds() {
     const node = document.querySelector(`[data-node-id="${id}"]`);
     return node?.dataset.nodeType === 'layer';
   });
+}
+
+function buildLayerIdsSignature(layerIds) {
+  return [...layerIds].sort((a, b) => a - b).join(',');
 }
 
 function collectExpandedGroups() {
@@ -440,38 +470,132 @@ function savePreset() {
   showStatus(`プリセット「${name}」を保存しました。`);
 }
 
-async function runAutoCompose(requestId) {
-  if (!cacheKey || !previewImage || !previewLink) return;
+function runAutoCompose(requestId, checkedLayerIds) {
+  if (requestId !== latestComposeRequestId) return;
+  if (!cacheKey || !previewLayerStack || !previewData?.layers) return;
+
+  const selectedLayerIds = new Set(checkedLayerIds.map(Number));
+  const selectedLayers = previewData.layers.filter((layer) => selectedLayerIds.has(Number(layer.id)));
+  previewLayerStack.replaceChildren();
+
+  if (selectedLayers.length === 0) {
+    previewStage?.classList.add('is-hidden');
+    previewEmpty?.classList.remove('is-hidden');
+    previewLinkRow?.classList.add('is-hidden');
+    showPreviewNote('');
+    return;
+  }
+
+  selectedLayers.forEach((layer) => {
+    const image = document.createElement('img');
+    image.src = layer.png_url;
+    image.alt = '';
+    image.draggable = false;
+    previewLayerStack.appendChild(image);
+  });
+
+  previewEmpty?.classList.add('is-hidden');
+  previewStage?.classList.remove('is-hidden');
+  previewLinkRow?.classList.add('is-hidden');
+  showPreviewNote('');
+}
+
+function logPendingComposeRemove(reason) {
+  console.log('[compose-pending] remove', {
+    reason,
+    rawBeforeRemove: sessionStorage.getItem(pendingComposeReflectKey),
+  });
+}
+
+function isComposeReflectLeaveReason(reason) {
+  return reason === 'pagehide' || reason === 'beforeunload';
+}
+
+function reflectComposeBeforeLeaving(reason = 'unknown') {
+  const isLeaveReason = isComposeReflectLeaveReason(reason);
+  if (isLeaveReason && composeReflectLeaveHandled) {
+    console.log('[compose-pending] skip', {
+      reason,
+      skipReason: composeReflectPendingSaved ? 'leave already saved pending' : 'leave already handled',
+      currentSignature: '',
+      lastReflectedSignature: lastReflectedComposeSignature,
+      checkedLayerIds: [],
+    });
+    return;
+  }
+  if (isLeaveReason) {
+    composeReflectLeaveHandled = true;
+  }
+
+  if (!cacheKey) {
+    console.log('[compose-pending] skip', {
+      reason,
+      skipReason: 'missing cacheKey',
+      currentSignature: '',
+      lastReflectedSignature: lastReflectedComposeSignature,
+      checkedLayerIds: [],
+    });
+    return;
+  }
+  const checkedLayerIds = collectCheckedLayerIds();
+  if (checkedLayerIds.length === 0) {
+    console.log('[compose-pending] skip', {
+      reason,
+      skipReason: 'no checked layer ids',
+      currentSignature: '',
+      lastReflectedSignature: lastReflectedComposeSignature,
+      checkedLayerIds,
+    });
+    return;
+  }
+
+  const composeSignature = buildLayerIdsSignature(checkedLayerIds);
+  if (lastReflectedComposeSignature === composeSignature) {
+    console.log('[compose-pending] skip', {
+      reason,
+      skipReason: 'signature matched',
+      currentSignature: composeSignature,
+      lastReflectedSignature: lastReflectedComposeSignature,
+      checkedLayerIds,
+    });
+    if (composeReflectPendingSaved) return;
+    logPendingComposeRemove(`${reason}: signature matched`);
+    sessionStorage.removeItem(pendingComposeReflectKey);
+    return;
+  }
+
+  const pendingPayload = {
+    cache_key: cacheKey,
+    signature: composeSignature,
+  };
+  console.log('[compose-pending] save', {
+    reason,
+    currentSignature: composeSignature,
+    lastReflectedSignature: lastReflectedComposeSignature,
+    checkedLayerIds,
+    pendingPayload,
+  });
+  sessionStorage.setItem(pendingComposeReflectKey, JSON.stringify(pendingPayload));
+  console.log('[compose-pending] saved raw', sessionStorage.getItem(pendingComposeReflectKey));
+  composeReflectLeaveHandled = true;
+  composeReflectPendingSaved = true;
+  lastReflectedComposeSignature = composeSignature;
+  const payload = JSON.stringify({
+    cache_key: cacheKey,
+    checked_ids: checkedLayerIds,
+  });
 
   try {
-    showPreviewNote('プレビュー更新中...', 'loading');
-    const response = await fetch('/api/compose', {
+    fetch('/api/compose', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        cache_key: cacheKey,
-        checked_ids: collectCheckedLayerIds(),
-      }),
-    });
-    const data = await response.json();
-    if (requestId !== latestComposeRequestId) return;
-
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || '自動合成に失敗しました。');
-    }
-
-    previewEmpty?.classList.add('is-hidden');
-    previewStage?.classList.remove('is-hidden');
-    previewLinkRow?.classList.remove('is-hidden');
-    previewImage.src = `${data.image_url}?t=${Date.now()}`;
-    previewLink.href = data.image_url;
-    previewLink.textContent = data.image_url.replace('/outputs/', '');
-    showPreviewNote('');
-  } catch (error) {
-    if (requestId !== latestComposeRequestId) return;
-    showPreviewNote(error.message || '自動合成に失敗しました。', 'error');
+      body: payload,
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    // Navigation should not be blocked by best-effort preview persistence.
   }
 }
 
@@ -512,14 +636,24 @@ async function savePortrait() {
 }
 
 function scheduleAutoCompose() {
-  if (!previewImage || !previewLink) return;
+  if (!previewLayerStack) return;
+  const checkedLayerIds = collectCheckedLayerIds();
+  const composeSignature = buildLayerIdsSignature(checkedLayerIds);
+  if (lastSubmittedComposeSignature === composeSignature) {
+    if (autoComposeTimer) {
+      clearTimeout(autoComposeTimer);
+      autoComposeTimer = null;
+    }
+    return;
+  }
+
   if (autoComposeTimer) {
     clearTimeout(autoComposeTimer);
   }
   const requestId = ++latestComposeRequestId;
-  autoComposeTimer = setTimeout(() => {
-    runAutoCompose(requestId);
-  }, 400);
+  autoComposeTimer = null;
+  lastSubmittedComposeSignature = composeSignature;
+  runAutoCompose(requestId, checkedLayerIds);
 }
 
 document.querySelectorAll('[data-toggle]').forEach((button) => {
@@ -554,9 +688,27 @@ document.querySelectorAll('input[name="layer_ids"]').forEach((checkbox) => {
 });
 
 psdDisplayPathSelect?.addEventListener('change', syncSelectedPsdPath);
-psdLoadForm?.addEventListener('submit', syncSelectedPsdPath);
+psdLoadForm?.addEventListener('submit', () => {
+  console.log('[compose-pending] enter psd load submit');
+  reflectComposeBeforeLeaving('psd load submit');
+  syncSelectedPsdPath();
+});
 savePresetButton?.addEventListener('click', savePreset);
 savePortraitButton?.addEventListener('click', savePortrait);
+document.querySelector('form[action="/compose"]')?.addEventListener('submit', () => {
+  console.log('[compose-pending] enter manual compose submit');
+  lastReflectedComposeSignature = buildLayerIdsSignature(collectCheckedLayerIds());
+  logPendingComposeRemove('manual compose submit');
+  sessionStorage.removeItem(pendingComposeReflectKey);
+});
+window.addEventListener('pagehide', () => {
+  console.log('[compose-pending] enter pagehide');
+  reflectComposeBeforeLeaving('pagehide');
+});
+window.addEventListener('beforeunload', () => {
+  console.log('[compose-pending] enter beforeunload');
+  reflectComposeBeforeLeaving('beforeunload');
+});
 
 const restoredPortraitState = restorePortraitPageOnLoad();
 if (!restoredPortraitState) {
