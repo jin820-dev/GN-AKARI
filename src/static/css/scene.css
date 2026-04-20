@@ -502,11 +502,6 @@ input[type="file"] {
 .preview-text-layer.is-dragging {
   box-shadow: 0 0 0 1px rgba(90, 58, 27, 0.2);
 }
-.preview-text-layer.is-selected-layer,
-.preview-layer--portrait.is-selected-layer,
-.preview-overlay-layer.is-selected-layer {
-  box-shadow: 0 0 0 2px rgba(230, 145, 56, 0.7);
-}
 .preview-layer {
   position: absolute;
   display: block;
@@ -555,6 +550,15 @@ input[type="file"] {
 }
 .preview-overlay-layer--interactive.is-dragging {
   cursor: grabbing;
+}
+.preview-text-layer.is-selected-layer,
+.preview-layer--portrait.is-selected-layer,
+.preview-overlay-layer.is-selected-layer {
+  box-shadow: 0 0 0 2px rgba(132, 204, 22, 0.36),
+    inset 0 0 0 1px rgba(236, 252, 203, 0.35);
+  filter: drop-shadow(0 2px 3px rgba(20, 83, 45, 0.55))
+    drop-shadow(0 0 6px rgba(132, 204, 22, 0.85))
+    drop-shadow(0 0 12px rgba(217, 249, 157, 0.55));
 }
 .preview-layer.is-position-locked,
 .preview-text-layer.is-position-locked,
