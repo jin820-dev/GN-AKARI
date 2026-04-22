@@ -6,8 +6,10 @@ const portraitStateKey = 'gn_akari_portrait_state';
 const portraitRestorePendingKey = 'gn_akari_portrait_restore_pending';
 const pendingComposeReflectKey = 'gn_akari_pending_compose_reflect';
 const presetStatus = document.getElementById('preset-status');
-const presetList = document.getElementById('preset-list');
-const presetNameInput = document.getElementById('preset-name');
+const presetSelect = document.getElementById('preset-select');
+const applyPresetButton = document.getElementById('apply-preset-button');
+const renamePresetButton = document.getElementById('rename-preset-button');
+const deletePresetButton = document.getElementById('delete-preset-button');
 const savePresetButton = document.getElementById('save-preset-button');
 const psdLoadForm = document.getElementById('psd-load-form');
 const psdDisplayPathSelect = document.getElementById('psd-display-path');
@@ -19,11 +21,13 @@ const previewLinkRow = document.getElementById('preview-link-row');
 const previewNote = document.getElementById('preview-note');
 const previewStage = document.getElementById('preview-stage');
 const previewEmpty = document.getElementById('preview-empty');
+const previewPanel = document.getElementById('workbench-preview');
+const previewToggleButton = document.getElementById('preview-toggle-button');
 const savePortraitButton = document.getElementById('save-portrait-button');
-const portraitNameInput = document.getElementById('portrait-name');
 const portraitLink = document.getElementById('portrait-link');
 const portraitLinkRow = document.getElementById('portrait-link-row');
 const portraitSaveNote = document.getElementById('portrait-save-note');
+const previewCollapsedStorageKey = 'gn_akari_preview_collapsed';
 let autoComposeTimer = null;
 let latestComposeRequestId = 0;
 let lastSubmittedComposeSignature = null;
@@ -33,6 +37,7 @@ let composeReflectPendingSaved = false;
 let isRestoringPortraitState = false;
 let editingPresetIndex = null;
 let editingPresetName = '';
+let selectedPresetIndex = 0;
 const previewData = parsePreviewData();
 
 function showStatus(message, isError = false) {
@@ -46,6 +51,25 @@ function showPreviewNote(message, state = '') {
   previewNote.textContent = message;
   previewNote.classList.toggle('is-loading', state === 'loading');
   previewNote.classList.toggle('is-error', state === 'error');
+}
+
+function setPreviewCollapsed(collapsed) {
+  if (!previewPanel || !previewToggleButton) return;
+  previewPanel.classList.toggle('is-preview-collapsed', collapsed);
+  previewToggleButton.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  try {
+    sessionStorage.setItem(previewCollapsedStorageKey, collapsed ? '1' : '0');
+  } catch {
+    // Preview collapse state is optional.
+  }
+}
+
+function initializePreviewCollapse() {
+  if (!previewPanel || !previewToggleButton) return;
+  setPreviewCollapsed(false);
+  previewToggleButton.addEventListener('click', () => {
+    setPreviewCollapsed(!previewPanel.classList.contains('is-preview-collapsed'));
+  });
 }
 
 function showPortraitSaveNote(message, state = '') {
@@ -286,109 +310,74 @@ function restorePortraitPageOnLoad() {
 }
 
 function renderPresetList() {
-  if (!presetList) return;
+  if (!presetSelect) return;
   const presets = loadPresets().presets;
-  presetList.innerHTML = '';
+  presetSelect.innerHTML = '';
 
   if (presets.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'meta';
-    empty.textContent = '保存済みプリセットはありません。';
-    presetList.appendChild(empty);
+    const emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = '保存済みプリセットはありません';
+    presetSelect.appendChild(emptyOption);
+    presetSelect.disabled = true;
+    applyPresetButton?.setAttribute('disabled', 'disabled');
+    renamePresetButton?.setAttribute('disabled', 'disabled');
+    deletePresetButton?.setAttribute('disabled', 'disabled');
     return;
   }
 
   presets.forEach((preset, index) => {
-    const row = document.createElement('div');
-    row.className = 'preset-item';
-
-    if (editingPresetIndex === index) {
-      const nameInput = document.createElement('input');
-      nameInput.type = 'text';
-      nameInput.className = 'preset-name-input';
-      nameInput.value = editingPresetName;
-      nameInput.dataset.renameInput = 'true';
-      nameInput.addEventListener('input', (event) => {
-        editingPresetName = event.target.value;
-      });
-      nameInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          commitRenamePreset(index);
-        } else if (event.key === 'Escape') {
-          event.preventDefault();
-          cancelRenamePreset();
-        }
-      });
-      row.appendChild(nameInput);
-    } else {
-      const name = document.createElement('span');
-      name.className = 'preset-item-name';
-      name.textContent = preset.name;
-      row.appendChild(name);
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'preset-item-actions';
-
-    if (editingPresetIndex === index) {
-      const saveRenameButton = document.createElement('button');
-      saveRenameButton.type = 'button';
-      saveRenameButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><span>保存</span>';
-      saveRenameButton.addEventListener('click', () => {
-        commitRenamePreset(index);
-      });
-      actions.appendChild(saveRenameButton);
-
-      const cancelRenameButton = document.createElement('button');
-      cancelRenameButton.type = 'button';
-      cancelRenameButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 6-12 12"/><path d="m6 6 12 12"/></svg><span>キャンセル</span>';
-      cancelRenameButton.addEventListener('click', () => {
-        cancelRenamePreset();
-      });
-      actions.appendChild(cancelRenameButton);
-    } else {
-      const applyButton = document.createElement('button');
-      applyButton.type = 'button';
-      applyButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg><span>適用</span>';
-      applyButton.addEventListener('click', () => {
-        applyState(preset);
-        saveState();
-        showStatus(`プリセット「${preset.name}」を適用しました。`);
-        scheduleAutoCompose();
-      });
-      actions.appendChild(applyButton);
-
-      const renameButton = document.createElement('button');
-      renameButton.type = 'button';
-      renameButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg><span>名前変更</span>';
-      renameButton.addEventListener('click', () => {
-        startRenamePreset(index);
-      });
-      actions.appendChild(renameButton);
-    }
-
-    const deleteButton = document.createElement('button');
-    deleteButton.type = 'button';
-    deleteButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg><span>削除</span>';
-    deleteButton.addEventListener('click', () => {
-      const data = loadPresets();
-      data.presets.splice(index, 1);
-      savePresets(data);
-      renderPresetList();
-      showStatus(`プリセット「${preset.name}」を削除しました。`);
-    });
-    actions.appendChild(deleteButton);
-
-    row.appendChild(actions);
-    presetList.appendChild(row);
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = preset.name;
+    presetSelect.appendChild(option);
   });
 
-  if (editingPresetIndex !== null) {
-    const activeInput = presetList.querySelector('[data-rename-input="true"]');
-    activeInput?.focus();
-    activeInput?.select();
+  const fallbackIndex = Math.min(selectedPresetIndex, presets.length - 1);
+  presetSelect.value = String(fallbackIndex);
+  selectedPresetIndex = Number(presetSelect.value) || 0;
+  presetSelect.disabled = false;
+  applyPresetButton?.removeAttribute('disabled');
+  renamePresetButton?.removeAttribute('disabled');
+  deletePresetButton?.removeAttribute('disabled');
+}
+
+function getSelectedPresetIndex() {
+  if (!presetSelect || presetSelect.disabled) return -1;
+  const index = Number(presetSelect.value);
+  return Number.isInteger(index) ? index : -1;
+}
+
+function getSelectedPreset() {
+  const index = getSelectedPresetIndex();
+  if (index < 0) return { index: -1, preset: null };
+  return { index, preset: loadPresets().presets[index] || null };
+}
+
+function applySelectedPreset() {
+  const { preset } = getSelectedPreset();
+  if (!preset) {
+    showStatus('対象のプリセットが見つかりません。', true);
+    return;
   }
+  applyState(preset);
+  saveState();
+  showStatus(`プリセット「${preset.name}」を適用しました。`);
+  scheduleAutoCompose();
+}
+
+function deleteSelectedPreset() {
+  const { index, preset } = getSelectedPreset();
+  if (!preset) {
+    showStatus('対象のプリセットが見つかりません。', true);
+    return;
+  }
+  const data = loadPresets();
+  data.presets.splice(index, 1);
+  selectedPresetIndex = Math.max(0, Math.min(index, data.presets.length - 1));
+  savePresets(data);
+  renderPresetList();
+  showStatus(`プリセット「${preset.name}」を削除しました。`);
 }
 
 function startRenamePreset(index) {
@@ -398,9 +387,11 @@ function startRenamePreset(index) {
     showStatus('対象のプリセットが見つかりません。', true);
     return;
   }
+  const nextName = window.prompt('新しいプリセット名を入力してください。', target.name);
+  if (nextName === null) return;
   editingPresetIndex = index;
-  editingPresetName = target.name;
-  renderPresetList();
+  editingPresetName = nextName;
+  commitRenamePreset(index);
 }
 
 function commitRenamePreset(index) {
@@ -427,6 +418,7 @@ function commitRenamePreset(index) {
   }
 
   target.name = trimmedName;
+  selectedPresetIndex = index;
   editingPresetIndex = null;
   editingPresetName = '';
   savePresets(data);
@@ -441,7 +433,7 @@ function cancelRenamePreset() {
 }
 
 function savePreset() {
-  const name = (presetNameInput?.value || '').trim();
+  const name = (window.prompt('新規に登録するプリセット名を入力してください。') || '').trim();
   if (!name) {
     showStatus('プリセット名を入力してください。', true);
     return;
@@ -465,6 +457,7 @@ function savePreset() {
     data.presets.push(preset);
   }
 
+  selectedPresetIndex = data.presets.findIndex((storedPreset) => storedPreset.name === name);
   savePresets(data);
   renderPresetList();
   showStatus(`プリセット「${name}」を保存しました。`);
@@ -608,6 +601,8 @@ async function savePortrait() {
       showPortraitSaveNote('保存するレイヤーを1つ以上選択してください。', 'error');
       return;
     }
+    const portraitName = (window.prompt('名前を入力してください。') || '').trim();
+    if (!portraitName) return;
 
     showPortraitSaveNote('立ち絵を保存中...');
     const response = await fetch('/api/save_portrait', {
@@ -618,7 +613,7 @@ async function savePortrait() {
       body: JSON.stringify({
         cache_key: cacheKey,
         checked_ids: checkedIds,
-        name: portraitNameInput?.value || '',
+        name: portraitName,
       }),
     });
     const data = await response.json();
@@ -687,6 +682,7 @@ document.querySelectorAll('input[name="layer_ids"]').forEach((checkbox) => {
   });
 });
 
+initializePreviewCollapse();
 psdDisplayPathSelect?.addEventListener('change', syncSelectedPsdPath);
 psdLoadForm?.addEventListener('submit', () => {
   console.log('[compose-pending] enter psd load submit');
@@ -694,6 +690,12 @@ psdLoadForm?.addEventListener('submit', () => {
   syncSelectedPsdPath();
 });
 savePresetButton?.addEventListener('click', savePreset);
+applyPresetButton?.addEventListener('click', applySelectedPreset);
+renamePresetButton?.addEventListener('click', () => startRenamePreset(getSelectedPresetIndex()));
+deletePresetButton?.addEventListener('click', deleteSelectedPreset);
+presetSelect?.addEventListener('change', () => {
+  selectedPresetIndex = getSelectedPresetIndex();
+});
 savePortraitButton?.addEventListener('click', savePortrait);
 document.querySelector('form[action="/compose"]')?.addEventListener('submit', () => {
   console.log('[compose-pending] enter manual compose submit');

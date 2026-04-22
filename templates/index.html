@@ -44,6 +44,25 @@
     </div>
     {% endfor %}
   {% endmacro %}
+  {% macro render_psd_selector() %}
+    <h2>PSD選択</h2>
+    <form method="post" action="/load_psd" id="psd-load-form">
+      <input type="hidden" id="psd-path" name="psd_path" value="{{ selected_psd or '' }}">
+      <select id="psd-display-path">
+        <option value="">PSDを選択してください</option>
+        {% for psd in psd_files %}
+        <option
+          value="{{ psd.rsplit('/', 1)[-1] }}"
+          data-psd-path="{{ psd }}"
+          {% if psd == selected_psd %}selected{% endif %}
+        >{{ psd.rsplit('/', 1)[-1] }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="icon-button" title="読み込む" aria-label="読み込む">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h5l2 2h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h3"/></svg>
+      </button>
+    </form>
+  {% endmacro %}
 
   <header class="page-header">
     <h1>GN-AKARI</h1>
@@ -59,76 +78,61 @@
   <div class="error">{{ error_message }}</div>
   {% endif %}
 
+  {% if not layer_tree %}
   <section class="panel section">
-    <h2>PSD選択</h2>
-    <form method="post" action="/load_psd" id="psd-load-form">
-      <input type="hidden" id="psd-path" name="psd_path" value="{{ selected_psd or '' }}">
-      <select id="psd-display-path">
-        <option value="">PSDを選択してください</option>
-        {% for psd in psd_files %}
-        <option
-          value="{{ psd.rsplit('/', 1)[-1] }}"
-          data-psd-path="{{ psd }}"
-          {% if psd == selected_psd %}selected{% endif %}
-        >{{ psd.rsplit('/', 1)[-1] }}</option>
-        {% endfor %}
-      </select>
-      <button type="submit" title="読み込む">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h5l2 2h11v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h3"/></svg>
-        読み込む
-      </button>
-    </form>
+    {{ render_psd_selector() }}
   </section>
+  {% endif %}
 
   {% if layer_tree or output_image %}
   <div class="workbench">
+    <div class="mobile-layout">
+      <div class="mobile-top">
     {% if layer_tree %}
-    <section class="workbench-main panel">
-      <h2>Layers</h2>
-      <div class="preset-panel">
-        <div id="preset-status" class="status"></div>
+    <section class="workbench-main panel mobile-left">
+      <div class="mobile-top-left">
+        <div class="psd-selector-inline">
+          {{ render_psd_selector() }}
+        </div>
+        <div class="preset-panel">
+          <div id="preset-status" class="status"></div>
 
-        <div class="preset-section">
-          <div class="preset-section-title">Save</div>
-          <div class="preset-row">
-            <input type="text" id="preset-name" class="preset-name-input" placeholder="プリセット名">
-            <button type="button" id="save-preset-button" title="保存">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
-              保存
-            </button>
+          <div class="preset-section">
+            <div class="preset-section-title">Presets</div>
+            <div class="preset-select-controls">
+              <select id="preset-select" class="preset-select" aria-label="プリセット選択"></select>
+              <div class="preset-actions">
+                <button type="button" id="save-preset-button" class="icon-button" title="新規保存" aria-label="新規保存">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+                </button>
+                <button type="button" id="apply-preset-button" class="icon-button" title="適用" aria-label="適用">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                </button>
+                <button type="button" id="rename-preset-button" class="icon-button" title="名前変更" aria-label="名前変更">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                </button>
+                <button type="button" id="delete-preset-button" class="icon-button" title="削除" aria-label="削除">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-
-        <div class="preset-section">
-          <div class="preset-section-title">Presets</div>
-          <div id="preset-list" class="preset-list"></div>
-        </div>
       </div>
-
-      <form method="post" action="/compose">
-        <input type="hidden" name="psd_path" value="{{ selected_psd }}">
-        <input type="hidden" name="layers_json" value="{{ layers_json }}">
-        <div class="layer-list">
-          {{ render_nodes(layer_tree, selected_layer_ids) }}
-        </div>
-        <button type="submit">合成</button>
-      </form>
     </section>
     {% endif %}
 
-    <section class="workbench-preview panel">
-      <h2>Preview</h2>
-      <div class="preview-actions">
-        <input
-          type="text"
-          id="portrait-name"
-          class="portrait-name-input"
-          placeholder="名前を入力（任意）"
-        >
-        <button type="button" id="save-portrait-button" title="保存">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
-          立ち絵を保存
-        </button>
+    <section class="workbench-preview panel" id="workbench-preview">
+      <div class="preview-header">
+        <h2>Preview</h2>
+        <div class="preview-header-actions">
+          <button type="button" id="save-portrait-button" class="icon-button" title="立ち絵を保存" aria-label="立ち絵を保存">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+          </button>
+          <button type="button" id="preview-toggle-button" class="icon-button preview-toggle-button" title="Previewを開閉" aria-label="Previewを開閉" aria-expanded="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
       </div>
       <p id="portrait-link-row" class="is-hidden">
         <a id="portrait-link" href="" target="_blank"></a>
@@ -155,6 +159,27 @@
       </div>
       <div id="preview-note" class="preview-note"></div>
     </section>
+      </div>
+    {% if layer_tree %}
+      <section class="mobile-bottom panel">
+        <form method="post" action="/compose">
+          <input type="hidden" name="psd_path" value="{{ selected_psd }}">
+          <input type="hidden" name="layers_json" value="{{ layers_json }}">
+          <div class="layers-header">
+            <h2>Layers</h2>
+            <button type="submit" class="icon-button" title="合成" aria-label="合成">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 3 2 4 4 2-4 2-2 4-2-4-4-2 4-2Z"/><path d="m17 11 1.5 3 3 1.5-3 1.5-1.5 3-1.5-3-3-1.5 3-1.5Z"/><path d="m14 2 1 2 2 1-2 1-1 2-1-2-2-1 2-1Z"/></svg>
+            </button>
+          </div>
+          <div class="layer-list">
+            <div class="layer-list-scroll">
+              {{ render_nodes(layer_tree, selected_layer_ids) }}
+            </div>
+          </div>
+        </form>
+      </section>
+    {% endif %}
+    </div>
   </div>
   {% endif %}
 
