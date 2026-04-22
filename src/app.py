@@ -7,6 +7,7 @@ import re
 import secrets
 import shutil
 import struct
+import time
 from datetime import datetime
 from functools import lru_cache
 from io import BytesIO
@@ -14,13 +15,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from bubble_assets import (
     OVERLAY_ASSETS_METADATA_PATH,
     OVERLAY_IMAGE_LIBRARY_DIR,
+    build_registered_overlay_assets,
     build_bubble_overlay_size,
     list_registered_bubble_overlay_assets,
     load_registered_overlay_asset_records,
@@ -39,13 +41,15 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_PSD_DIR = ROOT_DIR / "data" / "psd"
 DATA_FONT_DIR = ROOT_DIR / "data" / "font"
 DATA_SRC_DIR = ROOT_DIR / "data" / "src"
+BACKGROUND_IMAGE_LIBRARY_DIR = ROOT_DIR / "data" / "assets" / "background_images"
+BACKGROUND_THUMBNAIL_DIR = ROOT_DIR / "data" / "assets" / "background_thumbnails"
+SCENE_BACKGROUND_UPLOAD_DIR = ROOT_DIR / "data" / "assets" / "scene_background_uploads"
 CACHE_DIR = ROOT_DIR / "cache"
 OUTPUTS_DIR = ROOT_DIR / "outputs"
 PREVIEW_OUTPUTS_DIR = OUTPUTS_DIR / "preview"
 PORTRAIT_OUTPUTS_DIR = OUTPUTS_DIR / "portrait"
 SCENE_OUTPUTS_DIR = OUTPUTS_DIR / "scene"
 SCENE_PREVIEW_OUTPUTS_DIR = OUTPUTS_DIR / "scene_preview"
-SCENE_BASE_OUTPUTS_DIR = OUTPUTS_DIR / "scene_base"
 COMPOSITE_PREVIEW_OUTPUTS_DIR = OUTPUTS_DIR / "composite_preview"
 SETTINGS_DATA_DIR = ROOT_DIR / "data" / "settings"
 TRASH_DIR = ROOT_DIR / "data" / "trash"
@@ -55,6 +59,9 @@ MAX_IMAGE_UPLOAD_BYTES = 20 * MB
 MAX_PSD_UPLOAD_BYTES = 50 * MB
 MAX_FONT_UPLOAD_BYTES = 10 * MB
 MAX_REQUEST_BYTES = 80 * MB
+SCENE_BACKGROUND_UPLOAD_TTL_DAYS = 30
+SCENE_BACKGROUND_GALLERY_LIMIT = 12
+BACKGROUND_THUMBNAIL_MAX_EDGE = 360
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED_PSD_EXTENSIONS = {".psd"}
 ALLOWED_FONT_EXTENSIONS = {".ttf", ".otf"}
@@ -659,17 +666,27 @@ def delete_psd_with_cache(psd_name: str) -> dict:
     }
 
 
-def list_gallery_items(output_dir: Path) -> list[dict]:
+def list_gallery_items(
+    output_dir: Path,
+    *,
+    url_root: str = "/outputs",
+    relative_root: Path | None = None,
+    extensions: set[str] | None = None,
+) -> list[dict]:
     if not output_dir.exists():
         return []
 
+    allowed_extensions = extensions or {".png"}
+    root = relative_root or OUTPUTS_DIR
     items = []
-    for image_path in output_dir.glob("*.png"):
+    for image_path in output_dir.iterdir():
+        if not image_path.is_file() or image_path.suffix.lower() not in allowed_extensions:
+            continue
         stat = image_path.stat()
         items.append(
             {
                 "filename": image_path.name,
-                "url": f"/outputs/{image_path.relative_to(OUTPUTS_DIR)}",
+                "url": f"{url_root}/{image_path.relative_to(root)}",
                 "mtime": datetime.fromtimestamp(stat.st_mtime),
             }
         )
@@ -684,6 +701,60 @@ def list_portrait_gallery_items() -> list[dict]:
 
 def list_scene_gallery_items() -> list[dict]:
     return list_gallery_items(SCENE_OUTPUTS_DIR)
+
+
+def list_background_gallery_items() -> list[dict]:
+    items = list_gallery_items(
+        BACKGROUND_IMAGE_LIBRARY_DIR,
+        url_root="/assets",
+        relative_root=BACKGROUND_IMAGE_LIBRARY_DIR.parent,
+        extensions=ALLOWED_IMAGE_EXTENSIONS,
+    )
+    for item in items:
+        thumbnail_path = build_background_thumbnail_path(item["filename"])
+        if thumbnail_path.exists() and thumbnail_path.is_file():
+            item["thumbnail_url"] = build_background_thumbnail_url(item["filename"])
+    return items
+
+
+def list_scene_background_gallery_items() -> list[dict]:
+    return list_background_gallery_items()[:SCENE_BACKGROUND_GALLERY_LIMIT]
+
+
+def resolve_background_library_image_path(filename: str) -> Path | None:
+    if not filename:
+        return None
+    if Path(filename).name != filename:
+        return None
+
+    candidate = (BACKGROUND_IMAGE_LIBRARY_DIR / filename).resolve()
+    try:
+        candidate.relative_to(BACKGROUND_IMAGE_LIBRARY_DIR.resolve())
+    except ValueError:
+        return None
+
+    if candidate.suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS or not candidate.exists() or not candidate.is_file():
+        return None
+    return candidate
+
+
+def list_overlay_gallery_items() -> list[dict]:
+    items = []
+    for asset in build_registered_overlay_assets().values():
+        file_path = asset["file_path"]
+        stat = file_path.stat()
+        items.append(
+            {
+                "filename": asset["filename"],
+                "url": asset["file_url"],
+                "mtime": datetime.fromtimestamp(stat.st_mtime),
+                "label": asset["label"],
+                "summary": f'{asset["default_width"]} x {asset["default_height"]} / {asset.get("kind", "image")}',
+            }
+        )
+
+    items.sort(key=lambda item: item["mtime"], reverse=True)
+    return items
 
 
 def resolve_gallery_output_path(output_dir: Path, filename: str) -> Path | None:
@@ -701,6 +772,94 @@ def resolve_gallery_output_path(output_dir: Path, filename: str) -> Path | None:
     return candidate
 
 
+def sanitize_background_image_filename(filename: str) -> str:
+    normalized = Path(filename or "").name.strip()
+    if not normalized:
+        raise ValueError("filename is required.")
+
+    suffix = Path(normalized).suffix.lower()
+    if suffix not in ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError("base image must be png, jpg, jpeg, or webp.")
+
+    stem = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", Path(normalized).stem).strip(" ._")
+    if not stem:
+        stem = "background"
+    return f"{stem}{suffix}"
+
+
+def build_background_image_storage_path(filename: str, storage_dir: Path) -> Path:
+    safe_name = sanitize_background_image_filename(filename)
+    candidate = storage_dir / safe_name
+    if not candidate.exists():
+        return candidate
+
+    stem = candidate.stem
+    suffix = candidate.suffix
+    index = 2
+    while True:
+        indexed_candidate = storage_dir / f"{stem}_{index}{suffix}"
+        if not indexed_candidate.exists():
+            return indexed_candidate
+        index += 1
+
+
+def build_background_thumbnail_path(filename: str) -> Path:
+    return BACKGROUND_THUMBNAIL_DIR / sanitize_background_image_filename(filename)
+
+
+def build_background_thumbnail_url(filename: str) -> str:
+    return f"/assets/{build_background_thumbnail_path(filename).relative_to(BACKGROUND_THUMBNAIL_DIR.parent)}"
+
+
+def ensure_rgb_image(image: Image.Image) -> Image.Image:
+    if image.mode in ("RGB", "L"):
+        return image
+    if image.mode in ("RGBA", "LA") or "transparency" in image.info:
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", image.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
+        return background
+    return image.convert("RGB")
+
+
+def create_background_thumbnail(source_path: Path) -> Path | None:
+    if source_path.suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS:
+        return None
+
+    BACKGROUND_THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
+    thumbnail_path = build_background_thumbnail_path(source_path.name)
+    try:
+        with Image.open(source_path) as image:
+            thumbnail = ImageOps.exif_transpose(image).copy()
+            thumbnail.thumbnail((BACKGROUND_THUMBNAIL_MAX_EDGE, BACKGROUND_THUMBNAIL_MAX_EDGE), Image.LANCZOS)
+            save_kwargs = {}
+            if thumbnail_path.suffix.lower() in {".jpg", ".jpeg"}:
+                thumbnail = ensure_rgb_image(thumbnail)
+                save_kwargs = {"quality": 82, "optimize": True}
+            elif thumbnail_path.suffix.lower() == ".png":
+                save_kwargs = {"optimize": True}
+            thumbnail.save(thumbnail_path, **save_kwargs)
+    except (OSError, ValueError):
+        return None
+    return thumbnail_path
+
+
+def cleanup_old_scene_background_uploads(now: float | None = None) -> None:
+    if not SCENE_BACKGROUND_UPLOAD_DIR.exists():
+        return
+
+    cutoff = (now if now is not None else time.time()) - SCENE_BACKGROUND_UPLOAD_TTL_DAYS * 24 * 60 * 60
+    for image_path in SCENE_BACKGROUND_UPLOAD_DIR.iterdir():
+        try:
+            if not image_path.is_file() or image_path.suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS:
+                continue
+            if image_path.stat().st_mtime >= cutoff:
+                continue
+            image_path.unlink()
+        except OSError:
+            continue
+
+
 def resolve_portrait_output_path(filename: str) -> Path | None:
     return resolve_gallery_output_path(PORTRAIT_OUTPUTS_DIR, filename)
 
@@ -710,6 +869,8 @@ def resolve_gallery_output_dir(kind: str) -> Path:
         return PORTRAIT_OUTPUTS_DIR
     if kind == "scene":
         return SCENE_OUTPUTS_DIR
+    if kind == "background":
+        return BACKGROUND_IMAGE_LIBRARY_DIR
     raise ValueError("kind is invalid.")
 
 
@@ -720,10 +881,15 @@ def delete_gallery_output(filename: str, kind: str = "portrait") -> str:
     safe_name = Path(raw_name).name
     if raw_name != safe_name:
         raise ValueError("name is invalid.")
-    if Path(safe_name).suffix.lower() != ".png":
-        raise ValueError("only .png files are supported.")
+    if kind == "overlay":
+        delete_overlay_asset_image_by_filename(safe_name)
+        return safe_name
 
     output_dir = resolve_gallery_output_dir(kind)
+    allowed_extensions = ALLOWED_IMAGE_EXTENSIONS if kind == "background" else {".png"}
+    if Path(safe_name).suffix.lower() not in allowed_extensions:
+        raise ValueError("image file type is invalid.")
+
     portrait_path = (output_dir / safe_name).resolve()
     try:
         portrait_path.relative_to(output_dir.resolve())
@@ -732,6 +898,14 @@ def delete_gallery_output(filename: str, kind: str = "portrait") -> str:
 
     if portrait_path.exists() and portrait_path.is_file():
         move_to_trash(portrait_path, "image")
+    if kind == "background":
+        thumbnail_path = build_background_thumbnail_path(safe_name).resolve()
+        try:
+            thumbnail_path.relative_to(BACKGROUND_THUMBNAIL_DIR.resolve())
+        except ValueError as exc:
+            raise ValueError("name is invalid.") from exc
+        if thumbnail_path.exists() and thumbnail_path.is_file():
+            move_to_trash(thumbnail_path, "image")
     return safe_name
 
 
@@ -739,15 +913,16 @@ def resolve_scene_base_output_path(filename: str) -> Path | None:
     if not filename:
         return None
 
-    candidate = (SCENE_BASE_OUTPUTS_DIR / filename).resolve()
-    try:
-        candidate.relative_to(SCENE_BASE_OUTPUTS_DIR.resolve())
-    except ValueError:
-        return None
+    for base_dir in (SCENE_BACKGROUND_UPLOAD_DIR, BACKGROUND_IMAGE_LIBRARY_DIR):
+        candidate = (base_dir / filename).resolve()
+        try:
+            candidate.relative_to(base_dir.resolve())
+        except ValueError:
+            return None
 
-    if candidate.suffix.lower() != ".png" or not candidate.exists() or not candidate.is_file():
-        return None
-    return candidate
+        if candidate.suffix.lower() in ALLOWED_IMAGE_EXTENSIONS and candidate.exists() and candidate.is_file():
+            return candidate
+    return None
 
 
 def resolve_scene_overlay_output_path(filename: str) -> Path | None:
@@ -798,14 +973,31 @@ def build_scene_overlay_storage_path(filename: str) -> Path:
 
 def save_scene_base_image(file_storage) -> tuple[str, str, str]:
     data = read_validated_image_upload(file_storage, "base image")
-    SCENE_BASE_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    output_name = f"{datetime.now().strftime('%y%m%d_%H%M%S')}_{secrets.token_hex(4)}.png"
-    output_path = SCENE_BASE_OUTPUTS_DIR / output_name
+    SCENE_BACKGROUND_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    cleanup_old_scene_background_uploads()
+    output_path = build_background_image_storage_path(file_storage.filename or "", SCENE_BACKGROUND_UPLOAD_DIR)
+    output_name = output_path.name
     display_name = Path(file_storage.filename or output_name).name
 
-    image = Image.open(BytesIO(data)).convert("RGBA")
-    image.save(output_path)
-    return output_name, f"/outputs/{output_path.relative_to(OUTPUTS_DIR)}", display_name
+    output_path.write_bytes(data)
+    return output_name, f"/assets/{output_path.relative_to(SCENE_BACKGROUND_UPLOAD_DIR.parent)}", display_name
+
+
+def save_background_library_image(file_storage) -> dict:
+    data = read_validated_image_upload(file_storage, "background image")
+    BACKGROUND_IMAGE_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = build_background_image_storage_path(file_storage.filename or "", BACKGROUND_IMAGE_LIBRARY_DIR)
+    output_path.write_bytes(data)
+    thumbnail_path = create_background_thumbnail(output_path)
+    stat = output_path.stat()
+    item = {
+        "filename": output_path.name,
+        "url": f"/assets/{output_path.relative_to(BACKGROUND_IMAGE_LIBRARY_DIR.parent)}",
+        "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+    }
+    if thumbnail_path is not None:
+        item["thumbnail_url"] = build_background_thumbnail_url(output_path.name)
+    return item
 
 
 def save_scene_overlay_image(file_storage) -> tuple[str, str, str]:
@@ -927,6 +1119,19 @@ def delete_overlay_asset_image(asset_id: str) -> dict:
 
     save_registered_overlay_asset_records(kept_records)
     return target_record
+
+
+def delete_overlay_asset_image_by_filename(filename: str) -> dict:
+    safe_name = Path(filename or "").name
+    if not safe_name or safe_name != filename:
+        raise ValueError("name is invalid.")
+    if Path(safe_name).suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS:
+        raise ValueError("image file type is invalid.")
+
+    for record in load_registered_overlay_asset_records():
+        if Path(str(record.get("filename") or "")).name == safe_name:
+            return delete_overlay_asset_image(str(record.get("id") or ""))
+    raise FileNotFoundError(f"overlay asset not found: {safe_name}")
 
 
 def sanitize_settings_name(name: str) -> str:
@@ -1186,6 +1391,8 @@ def render_scene_page(
     selected_portrait_filename: str | None = None,
     selected_portrait_url: str | None = None,
     selected_portrait_slot: int = 1,
+    selected_base_image_name: str | None = None,
+    selected_base_image_url: str | None = None,
     error_message: str | None = None,
 ):
     return render_template(
@@ -1194,9 +1401,12 @@ def render_scene_page(
         scene_image=scene_image,
         canvas_presets=canvas_presets or SCENE_CANVAS_PRESETS,
         bubble_overlay_assets=list_registered_bubble_overlay_assets(),
+        background_gallery_items=list_scene_background_gallery_items(),
         selected_portrait_filename=selected_portrait_filename,
         selected_portrait_url=selected_portrait_url,
         selected_portrait_slot=selected_portrait_slot,
+        selected_base_image_name=selected_base_image_name,
+        selected_base_image_url=selected_base_image_url,
         error_message=error_message,
     )
 
@@ -1206,6 +1416,8 @@ def render_gallery_page(*, gallery_items: list[dict] | None = None):
         "gallery.html",
         portrait_gallery_items=gallery_items if gallery_items is not None else list_portrait_gallery_items(),
         scene_gallery_items=list_scene_gallery_items(),
+        background_gallery_items=list_background_gallery_items(),
+        overlay_gallery_items=list_overlay_gallery_items(),
     )
 
 
@@ -1896,13 +2108,15 @@ def scene_page():
     selected_portrait_slot_raw = (request.args.get("slot") or "").strip()
     selected_portrait_slot = int(selected_portrait_slot_raw) if selected_portrait_slot_raw.isdigit() and int(selected_portrait_slot_raw) >= 1 else 1
     selected_portrait_path = resolve_portrait_output_path(selected_portrait_filename)
-    if selected_portrait_path is None:
-        return render_scene_page()
+    selected_background_filename = (request.args.get("base_image_name") or "").strip()
+    selected_background_path = resolve_background_library_image_path(selected_background_filename)
 
     return render_scene_page(
-        selected_portrait_filename=selected_portrait_path.name,
-        selected_portrait_url=f"/outputs/{selected_portrait_path.relative_to(OUTPUTS_DIR)}",
+        selected_portrait_filename=selected_portrait_path.name if selected_portrait_path else None,
+        selected_portrait_url=f"/outputs/{selected_portrait_path.relative_to(OUTPUTS_DIR)}" if selected_portrait_path else None,
         selected_portrait_slot=selected_portrait_slot,
+        selected_base_image_name=selected_background_path.name if selected_background_path else None,
+        selected_base_image_url=f"/assets/{selected_background_path.relative_to(BACKGROUND_IMAGE_LIBRARY_DIR.parent)}" if selected_background_path else None,
     )
 
 
@@ -2046,6 +2260,16 @@ def gallery_delete_api():
         kind = (data.get("kind") or "portrait").strip()
         deleted_name = delete_gallery_output(name, kind)
         return jsonify({"ok": True, "name": deleted_name, "kind": kind})
+    except (OSError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/gallery/background/upload")
+def gallery_background_upload_api():
+    try:
+        uploaded_file = request.files.get("background_image")
+        item = save_background_library_image(uploaded_file)
+        return jsonify({"ok": True, "item": item})
     except (OSError, ValueError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -2496,6 +2720,51 @@ def data_src_file(filename: str):
         return send_from_directory(DATA_SRC_DIR, overlay_path.name)
     except (FileNotFoundError, OSError, ValueError):
         return jsonify({"ok": False, "error": "source file not found."}), 404
+
+
+@app.get("/assets/background_images/<path:filename>")
+def background_image_file(filename: str):
+    try:
+        safe_name = Path(filename or "").name
+        if safe_name != filename or Path(safe_name).suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS:
+            raise ValueError("background image file is invalid.")
+        image_path = (BACKGROUND_IMAGE_LIBRARY_DIR / safe_name).resolve()
+        image_path.relative_to(BACKGROUND_IMAGE_LIBRARY_DIR.resolve())
+        if not image_path.exists() or not image_path.is_file():
+            raise FileNotFoundError(filename)
+        return send_from_directory(BACKGROUND_IMAGE_LIBRARY_DIR, image_path.name)
+    except (FileNotFoundError, OSError, ValueError):
+        return jsonify({"ok": False, "error": "background image file not found."}), 404
+
+
+@app.get("/assets/background_thumbnails/<path:filename>")
+def background_thumbnail_file(filename: str):
+    try:
+        safe_name = Path(filename or "").name
+        if safe_name != filename or Path(safe_name).suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS:
+            raise ValueError("background thumbnail file is invalid.")
+        thumbnail_path = (BACKGROUND_THUMBNAIL_DIR / safe_name).resolve()
+        thumbnail_path.relative_to(BACKGROUND_THUMBNAIL_DIR.resolve())
+        if not thumbnail_path.exists() or not thumbnail_path.is_file():
+            raise FileNotFoundError(filename)
+        return send_from_directory(BACKGROUND_THUMBNAIL_DIR, thumbnail_path.name)
+    except (FileNotFoundError, OSError, ValueError):
+        return jsonify({"ok": False, "error": "background thumbnail file not found."}), 404
+
+
+@app.get("/assets/scene_background_uploads/<path:filename>")
+def scene_background_upload_file(filename: str):
+    try:
+        safe_name = Path(filename or "").name
+        if safe_name != filename or Path(safe_name).suffix.lower() not in ALLOWED_IMAGE_EXTENSIONS:
+            raise ValueError("scene background file is invalid.")
+        image_path = (SCENE_BACKGROUND_UPLOAD_DIR / safe_name).resolve()
+        image_path.relative_to(SCENE_BACKGROUND_UPLOAD_DIR.resolve())
+        if not image_path.exists() or not image_path.is_file():
+            raise FileNotFoundError(filename)
+        return send_from_directory(SCENE_BACKGROUND_UPLOAD_DIR, image_path.name)
+    except (FileNotFoundError, OSError, ValueError):
+        return jsonify({"ok": False, "error": "scene background file not found."}), 404
 
 
 @app.get("/assets/overlay_images/<path:filename>")

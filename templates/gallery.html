@@ -21,21 +21,61 @@
     </nav>
   </header>
 
-  <section class="panel">
-    <h2>Portrait Gallery</h2>
-    <div id="gallery-status" class="status"></div>
-    {% if portrait_gallery_items %}
-    <div id="portrait-gallery-grid" class="gallery-grid">
-      {% for item in portrait_gallery_items %}
-      <div class="gallery-item" data-gallery-item="portrait:{{ item.filename }}">
+  {% macro render_gallery_section(kind, category, title, items, empty_message=None, show_use=False, show_delete=False, show_upload=False) %}
+  <section class="panel gallery-category-section{% if not items and not empty_message %} is-list-empty{% endif %}" data-gallery-category="{{ category }}">
+    <div class="gallery-section-header">
+      <h2>{{ title }}</h2>
+      {% if show_upload %}
+      <div class="gallery-section-actions">
+        {% if kind == "overlay" %}
+        <button type="button" class="gallery-upload-button" data-overlay-upload-trigger>オーバーレイを追加</button>
+        <input id="overlay-upload-input" class="gallery-upload-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+        {% else %}
+        <button type="button" class="gallery-upload-button" data-background-upload-trigger>背景画像を追加</button>
+        <input id="background-upload-input" class="gallery-upload-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+        {% endif %}
+        <button type="button" class="gallery-select-toggle-button" data-gallery-select-toggle="{{ kind }}">選択モード</button>
+        <button type="button" class="gallery-selection-clear-button" data-gallery-selection-clear="{{ kind }}" hidden>選択解除</button>
+        <button type="button" class="gallery-bulk-delete-button" data-gallery-bulk-delete="{{ kind }}" disabled hidden>選択中を削除</button>
+      </div>
+      {% endif %}
+    </div>
+    <div id="{{ kind }}-gallery-grid" class="gallery-grid">
+      {% if items %}
+      {% for item in items %}
+      <div class="gallery-item" data-gallery-item="{{ kind }}:{{ item.filename }}">
+        {% if kind == "background" or kind == "overlay" %}
+        <label class="gallery-select-control" aria-label="{{ item.filename }} を選択">
+          <input type="checkbox" data-gallery-select="{{ kind }}" data-filename="{{ item.filename }}">
+          <span></span>
+        </label>
+        {% endif %}
         <a class="gallery-link" href="{{ item.url }}" target="_blank">
-          <img class="gallery-image" src="{{ item.url }}" alt="{{ item.filename }}">
+          <img class="gallery-image" src="{{ item.thumbnail_url or item.url }}" alt="{{ item.filename }}" loading="lazy">
         </a>
         <div class="gallery-meta">
+          {% if item.label %}
+          <div class="gallery-label">{{ item.label }}</div>
+          {% endif %}
           <div class="filename">{{ item.filename }}</div>
+          {% if item.summary %}
+          <div class="gallery-summary">{{ item.summary }}</div>
+          {% endif %}
           <div class="mtime">{{ item.mtime.strftime("%Y-%m-%d %H:%M:%S") }}</div>
         </div>
+        {% if show_use or show_delete %}
         <div class="gallery-actions">
+          {% if show_use %}
+          {% if kind == "background" %}
+          <button
+            type="button"
+            class="gallery-action-button gallery-action-button--use gallery-action-button--background-use"
+            data-filename="{{ item.filename }}"
+            title="写真合成で使う"
+            aria-label="写真合成で使う"
+            onclick="useBackground(this.dataset.filename)"
+          >→</button>
+          {% else %}
           <div class="gallery-use-menu">
             <button
               type="button"
@@ -50,13 +90,16 @@
             <div class="portrait-slot-menu" data-portrait-slot-menu hidden>
             </div>
           </div>
+          {% endif %}
+          {% endif %}
+          {% if show_delete %}
           <button
             type="button"
             class="gallery-action-button gallery-action-button--delete"
             data-filename="{{ item.filename }}"
             title="削除"
             aria-label="削除"
-            onclick="deleteGalleryImage('portrait', this.dataset.filename)"
+            onclick="deleteGalleryImage('{{ kind }}', this.dataset.filename)"
           >
             <svg class="gallery-action-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16"></path>
@@ -66,51 +109,35 @@
               <path d="M9 7V4h6v3"></path>
             </svg>
           </button>
+          {% endif %}
         </div>
+        {% endif %}
       </div>
       {% endfor %}
+      {% endif %}
     </div>
+    {% if empty_message %}
+    <div id="{{ kind }}-gallery-empty" class="empty" {% if items %}style="display:none"{% endif %}>{{ empty_message }}</div>
     {% endif %}
-    <div id="portrait-gallery-empty" class="empty" {% if portrait_gallery_items %}style="display:none"{% endif %}>保存済みの立ち絵はまだありません。</div>
   </section>
+  {% endmacro %}
 
-  <section class="panel" style="margin-top: 16px;">
-    <h2>Scene Gallery</h2>
-    {% if scene_gallery_items %}
-    <div id="scene-gallery-grid" class="gallery-grid">
-      {% for item in scene_gallery_items %}
-      <div class="gallery-item" data-gallery-item="scene:{{ item.filename }}">
-        <a class="gallery-link" href="{{ item.url }}" target="_blank">
-          <img class="gallery-image" src="{{ item.url }}" alt="{{ item.filename }}">
-        </a>
-        <div class="gallery-meta">
-          <div class="filename">{{ item.filename }}</div>
-          <div class="mtime">{{ item.mtime.strftime("%Y-%m-%d %H:%M:%S") }}</div>
-        </div>
-        <div class="gallery-actions">
-          <button
-            type="button"
-            class="gallery-action-button gallery-action-button--delete"
-            data-filename="{{ item.filename }}"
-            title="削除"
-            aria-label="削除"
-            onclick="deleteGalleryImage('scene', this.dataset.filename)"
-          >
-            <svg class="gallery-action-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 7h16"></path>
-              <path d="M10 11v6"></path>
-              <path d="M14 11v6"></path>
-              <path d="M6 7l1 14h10l1-14"></path>
-              <path d="M9 7V4h6v3"></path>
-            </svg>
-          </button>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-    <div id="scene-gallery-empty" class="empty" {% if scene_gallery_items %}style="display:none"{% endif %}>保存済みの写真合成画像はまだありません。</div>
-  </section>
+  <div class="gallery-category-tabs" role="tablist" aria-label="ギャラリーカテゴリ">
+    <button type="button" class="gallery-category-tab is-active" data-gallery-category-tab="works" aria-selected="true">作品</button>
+    <button type="button" class="gallery-category-tab" data-gallery-category-tab="background" aria-selected="false">背景</button>
+    <button type="button" class="gallery-category-tab" data-gallery-category-tab="overlay" aria-selected="false">オーバーレイ</button>
+  </div>
+
+  {{ render_gallery_section("portrait", "works", "Portrait Gallery", portrait_gallery_items, show_use=True, show_delete=True) }}
+  {{ render_gallery_section("scene", "works", "Scene Gallery", scene_gallery_items, show_delete=True) }}
+  <div id="works-gallery-empty" class="empty gallery-category-empty" data-gallery-category="works" {% if portrait_gallery_items or scene_gallery_items %}style="display:none"{% endif %}>まだ作品がありません。立ち絵合成または写真合成で作成してください。</div>
+  {{ render_gallery_section("background", "background", "Background Gallery", background_gallery_items, "まだ背景がありません。背景画像を追加して登録できます。", show_use=True, show_delete=True, show_upload=True) }}
+  {{ render_gallery_section("overlay", "overlay", "Overlay Gallery", overlay_gallery_items, "まだオーバーレイがありません。右上の追加ボタンから登録できます。", show_delete=True, show_upload=True) }}
+
+  <div id="gallery-preview-modal" class="gallery-preview-modal is-hidden" role="dialog" aria-modal="true" aria-label="画像プレビュー">
+    <button type="button" id="gallery-preview-close" class="gallery-preview-close" aria-label="閉じる">×</button>
+    <img id="gallery-preview-image" class="gallery-preview-image" alt="">
+  </div>
 
   <script src="{{ url_for('static', filename='js/gallery.js') }}"></script>
   <script src="{{ url_for('static', filename='js/pwa-register.js') }}" defer></script>

@@ -69,6 +69,27 @@
           <div class="settings-block-body">
           <div class="field">
             <label for="base-image">ベース画像</label>
+            <button type="button" id="background-picker-toggle" class="secondary-button">背景を選択</button>
+            <div id="background-picker" class="background-picker is-hidden">
+              {% if background_gallery_items %}
+              <div class="background-picker-grid">
+                {% for item in background_gallery_items %}
+                <button
+                  type="button"
+                  class="background-picker-item"
+                  data-background-filename="{{ item.filename }}"
+                  data-background-url="{{ item.url }}"
+                  title="{{ item.filename }}"
+                >
+                  <img src="{{ item.url }}" alt="{{ item.filename }}">
+                  <span>{{ item.filename }}</span>
+                </button>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="background-picker-empty">保存済みの背景画像はまだありません。</div>
+              {% endif %}
+            </div>
             <input id="base-image" name="base_image" type="file" accept="image/png,image/jpeg,image/webp">
             <div class="field-note">画像アップロード上限は 20MB です。</div>
             <div id="base-image-source" class="base-image-source"></div>
@@ -413,9 +434,12 @@
     window.sceneBootstrap = {
       canvasPresets: {{ canvas_presets | tojson }},
       bubbleOverlayAssets: {{ bubble_overlay_assets | tojson }},
+      backgroundGalleryItems: {{ background_gallery_items | tojson }},
       previewSources: {{ preview_sources | tojson }},
       initialPortraitFilename: {{ (selected_portrait_filename or '') | tojson }},
-      initialPortraitSlot: {{ selected_portrait_slot or 1 }}
+      initialPortraitSlot: {{ selected_portrait_slot or 1 }},
+      initialBaseImageName: {{ (selected_base_image_name or '') | tojson }},
+      initialBaseImageUrl: {{ (selected_base_image_url or '') | tojson }}
     };
   </script>
   <script src="{{ url_for('static', filename='js/scene.js') }}"></script>

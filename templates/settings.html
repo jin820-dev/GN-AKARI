@@ -102,20 +102,6 @@
     </section>
 
     <section class="settings-section">
-      <div class="settings-section-title">画像素材管理</div>
-      <p class="subtle">画像素材は `data/assets/overlay_images/` に保存し、一覧は `data/assets/overlay_assets.json` で管理します。アップロード上限は 20MB です。</p>
-      <div class="psd-upload-row">
-        <label class="settings-file">
-          <span class="settings-file-label">画像素材を選択</span>
-          <input type="file" id="overlay-asset-upload-input" accept="image/png,image/jpeg,image/webp">
-        </label>
-        <button type="button" id="overlay-asset-upload-button">アップロード</button>
-      </div>
-      <div id="overlay-asset-list" class="psd-list"></div>
-      <div id="overlay-asset-list-empty" class="empty is-hidden">アップロード済みの画像素材はまだありません。</div>
-    </section>
-
-    <section class="settings-section">
       <div class="settings-section-title">データ削除について</div>
       <p id="trash-item-count" class="subtle">現在のゴミ箱記録数: {{ trash_item_count }}件</p>
       <p class="subtle">削除したファイルは即時削除せず `data/trash/` に移動し、`data/trash/trash_index.json` に記録します。自動削除は行わないため、必要に応じて手動で復旧・整理してください。</p>

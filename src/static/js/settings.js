@@ -19,10 +19,6 @@ const fontUploadInput = document.getElementById('font-upload-input');
 const fontUploadButton = document.getElementById('font-upload-button');
 const fontList = document.getElementById('font-list');
 const fontListEmpty = document.getElementById('font-list-empty');
-const overlayAssetUploadInput = document.getElementById('overlay-asset-upload-input');
-const overlayAssetUploadButton = document.getElementById('overlay-asset-upload-button');
-const overlayAssetList = document.getElementById('overlay-asset-list');
-const overlayAssetListEmpty = document.getElementById('overlay-asset-list-empty');
 const emptyTrashButton = document.getElementById('empty-trash-button');
 const trashItemCount = document.getElementById('trash-item-count');
 let editingSettingsIndex = null;
@@ -462,121 +458,6 @@ async function deleteFontFile(name) {
   }
 }
 
-function renderOverlayAssetList(items) {
-  if (!overlayAssetList || !overlayAssetListEmpty) return;
-  overlayAssetList.innerHTML = '';
-  overlayAssetListEmpty.classList.toggle('is-hidden', items.length > 0);
-  if (!items.length) {
-    return;
-  }
-
-  items.forEach((item) => {
-    const row = document.createElement('div');
-    row.className = 'psd-item';
-
-    const meta = document.createElement('div');
-    meta.className = 'psd-item-meta';
-
-    const name = document.createElement('div');
-    name.className = 'psd-item-name';
-    name.textContent = item.label || item.id;
-    meta.appendChild(name);
-
-    const file = document.createElement('div');
-    file.className = 'psd-item-date';
-    file.textContent = `${item.filename || ''} / ${item.default_width || '-'} x ${item.default_height || '-'}`;
-    meta.appendChild(file);
-
-    if (item.created_at) {
-      const date = document.createElement('div');
-      date.className = 'psd-item-date';
-      date.textContent = formatDateTime(item.created_at);
-      meta.appendChild(date);
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'settings-item-actions';
-
-    const deleteButton = document.createElement('button');
-    deleteButton.type = 'button';
-    deleteButton.textContent = '削除';
-    deleteButton.addEventListener('click', () => {
-      void deleteOverlayAssetFile(item.id, item.label || item.id);
-    });
-    actions.appendChild(deleteButton);
-
-    row.appendChild(meta);
-    row.appendChild(actions);
-    overlayAssetList.appendChild(row);
-  });
-}
-
-async function loadOverlayAssetList() {
-  try {
-    const response = await fetch('/api/overlay_assets/list');
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || '画像素材一覧の取得に失敗しました。');
-    }
-    renderOverlayAssetList(data.items || []);
-  } catch (error) {
-    showStatus(error.message || '画像素材一覧の取得に失敗しました。', true);
-  }
-}
-
-async function uploadOverlayAssetFile() {
-  const file = overlayAssetUploadInput?.files?.[0];
-  if (!file) {
-    showStatus('アップロードする画像素材を選択してください。', true);
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append('file', file);
-
-  try {
-    const response = await fetch('/api/overlay_assets/upload', {
-      method: 'POST',
-      body: formData,
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || '画像素材のアップロードに失敗しました。');
-    }
-    if (overlayAssetUploadInput) {
-      overlayAssetUploadInput.value = '';
-    }
-    showStatus(`画像素材「${data.item?.label || data.item?.id || file.name}」をアップロードしました。`);
-    await loadOverlayAssetList();
-  } catch (error) {
-    showStatus(error.message || '画像素材のアップロードに失敗しました。', true);
-  }
-}
-
-async function deleteOverlayAssetFile(id, label) {
-  if (!window.confirm(`画像素材「${label}」を削除します。ファイルはゴミ箱に移動され、scene で参照中の場合は表示されなくなります。よろしいですか？`)) {
-    return;
-  }
-
-  try {
-    const response = await fetch('/api/overlay_assets/delete', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ id }),
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || '画像素材の削除に失敗しました。');
-    }
-    showStatus(`画像素材「${data.item?.label || data.item?.id || label}」を削除しました（ゴミ箱に移動されました）。`);
-    await loadOverlayAssetList();
-  } catch (error) {
-    showStatus(error.message || '画像素材の削除に失敗しました。', true);
-  }
-}
-
 function renderServerSettingsList(items) {
   if (!settingsList || !settingsListEmpty) return;
   settingsList.innerHTML = '';
@@ -883,9 +764,6 @@ psdUploadButton?.addEventListener('click', () => {
 fontUploadButton?.addEventListener('click', () => {
   void uploadFontFile();
 });
-overlayAssetUploadButton?.addEventListener('click', () => {
-  void uploadOverlayAssetFile();
-});
 emptyTrashButton?.addEventListener('click', () => {
   void emptyTrash();
 });
@@ -894,4 +772,3 @@ initializeLayerOrderModeSetting();
 void loadServerSettingsList();
 void loadPsdList();
 void loadFontList();
-void loadOverlayAssetList();

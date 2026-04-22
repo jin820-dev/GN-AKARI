@@ -1,6 +1,7 @@
     const sceneBootstrap = window.sceneBootstrap || {};
     const canvasPresets = sceneBootstrap.canvasPresets || {};
     const bubbleOverlayAssets = sceneBootstrap.bubbleOverlayAssets || {};
+    const backgroundGalleryItems = sceneBootstrap.backgroundGalleryItems || [];
     const previewSources = sceneBootstrap.previewSources || [];
     const previewScaleFactor = 0.5;
 
@@ -9,6 +10,8 @@
     let initialPortraitSlot = Number(sceneBootstrap.initialPortraitSlot) >= 1
       ? Number(sceneBootstrap.initialPortraitSlot)
       : 1;
+    const initialBaseImageName = sceneBootstrap.initialBaseImageName || '';
+    const initialBaseImageUrl = sceneBootstrap.initialBaseImageUrl || '';
     const sceneStorageKey = 'gn_akari_scene_state';
     const portraitLayoutStorageKey = 'gn_akari_scene_portrait_layouts';
     const sceneUiStateStorageKey = 'gn_akari_scene_ui_state';
@@ -45,6 +48,8 @@
     const sceneLink = document.getElementById('scene-link');
     const sceneLinkRow = document.getElementById('scene-link-row');
     const baseImageInput = document.getElementById('base-image');
+    const backgroundPickerToggle = document.getElementById('background-picker-toggle');
+    const backgroundPicker = document.getElementById('background-picker');
     const baseImageSource = document.getElementById('base-image-source');
     const baseImageNameInput = document.getElementById('base-image-name');
     const baseImageDisplayNameInput = document.getElementById('base-image-display-name');
@@ -352,6 +357,7 @@
     let baseObjectUrl = null;
     let baseObjectUrlFile = null;
     let currentBasePreviewSourceKey = '';
+    let currentBubbleOverlayPreviewSourceKey = '';
     let restoredBaseImageUrl = '';
     let indexedDbBaseImageBlob = null;
     let sceneBaseImageDbPromise = null;
@@ -1340,9 +1346,26 @@
       clearInitialPortraitSeed();
     }
 
+    function commitInitialBaseImageSelection() {
+      if (!initialBaseImageName) return;
+      if (baseImageInput) {
+        baseImageInput.value = '';
+      }
+      if (baseImageNameInput) {
+        baseImageNameInput.value = initialBaseImageName;
+      }
+      if (baseImageDisplayNameInput) {
+        baseImageDisplayNameInput.value = initialBaseImageName;
+      }
+      restoredBaseImageUrl = initialBaseImageUrl || getBackgroundItemUrl(initialBaseImageName);
+      updateBaseImageSourceLabel();
+      saveSceneState();
+    }
+
     function applyStoredSceneState() {
       const stored = loadSceneState();
       if (!stored) {
+        commitInitialBaseImageSelection();
         commitInitialPortraitSelection();
         return;
       }
@@ -1369,6 +1392,7 @@
       if (stored.base_image_url) {
         restoredBaseImageUrl = stored.base_image_url;
       }
+      commitInitialBaseImageSelection();
       if (baseXInput && stored.base_x) {
         baseXInput.value = stored.base_x;
       }
@@ -1585,7 +1609,7 @@
         return restoredBaseImageUrl;
       }
       if (baseImageNameInput?.value) {
-        return `/outputs/scene_base/${encodeURIComponent(baseImageNameInput.value)}`;
+        return `/assets/background_images/${encodeURIComponent(baseImageNameInput.value)}`;
       }
       return '';
     }
@@ -1797,6 +1821,30 @@
         return;
       }
       baseImageSource.textContent = 'ベース画像が選択されていません';
+    }
+
+    function getBackgroundItemUrl(filename) {
+      const item = backgroundGalleryItems.find((background) => background.filename === filename);
+      return item?.url || `/assets/background_images/${encodeURIComponent(filename)}`;
+    }
+
+    function selectBackgroundImage(filename, url) {
+      if (!filename) return;
+      if (baseImageInput) {
+        baseImageInput.value = '';
+      }
+      if (baseImageNameInput) {
+        baseImageNameInput.value = filename;
+      }
+      if (baseImageDisplayNameInput) {
+        baseImageDisplayNameInput.value = filename;
+      }
+      restoredBaseImageUrl = url || getBackgroundItemUrl(filename);
+      updateBaseImageSourceLabel();
+      updatePreviewSources();
+      renderScenePreviewLayers();
+      saveSceneState();
+      scheduleScenePreview();
     }
 
     function getCurrentCanvasSize() {
@@ -2270,6 +2318,21 @@
       };
     }
 
+    function resolveBubbleOverlayPreviewSource(layout, asset) {
+      if (!layout) return { key: '', url: '' };
+      if (layout.source_type === 'file') {
+        const uploadFile = layout.upload_file || '';
+        return uploadFile
+          ? { key: `file:${uploadFile}`, url: `/data/src/${encodeURIComponent(uploadFile)}` }
+          : { key: '', url: '' };
+      }
+      const assetKey = layout.asset || asset?.id || '';
+      const url = layout.image_url || asset?.file || '';
+      return url
+        ? { key: `asset:${assetKey}:${url}`, url }
+        : { key: '', url: '' };
+    }
+
     function renderBasePreviewLayerPosition() {
       if (!baseLayer || baseLayer.naturalWidth <= 0 || baseLayer.naturalHeight <= 0) return;
       const { previewWidth, previewHeight } = getCurrentCanvasSize();
@@ -2346,11 +2409,11 @@
             overlayWidth,
             overlayHeight,
           );
-          bubbleOverlayLayer.src = bubbleOverlayLayout.source_type === 'file'
-            ? `/data/src/${encodeURIComponent(bubbleOverlayLayout.upload_file)}?t=${Date.now()}`
-            : bubbleOverlayLayout.image_url
-              ? `${bubbleOverlayLayout.image_url}?t=${Date.now()}`
-              : bubbleAsset?.file || '';
+          const overlaySource = resolveBubbleOverlayPreviewSource(bubbleOverlayLayout, bubbleAsset);
+          if (overlaySource.url && overlaySource.key !== currentBubbleOverlayPreviewSourceKey) {
+            bubbleOverlayLayer.src = overlaySource.url;
+            currentBubbleOverlayPreviewSourceKey = overlaySource.key;
+          }
           bubbleOverlayLayer.classList.remove('is-hidden');
           bubbleOverlayLayer.classList.add('preview-overlay-layer--interactive');
           bubbleOverlayResizeHandleRight?.classList.add('is-visible');
@@ -2359,6 +2422,7 @@
           setDebugRect(bubbleDebugRect, bubbleOverlayLayout, bubbleDebugVisible);
         } else {
           bubbleOverlayLayer.removeAttribute('src');
+          currentBubbleOverlayPreviewSourceKey = '';
           bubbleOverlayLayer.classList.add('is-hidden');
           bubbleOverlayLayer.classList.remove('preview-overlay-layer--interactive');
           bubbleOverlayResizeHandleRight?.classList.remove('is-visible');
@@ -2368,6 +2432,7 @@
       } else {
         if (bubbleOverlayLayer) {
           bubbleOverlayLayer.removeAttribute('src');
+          currentBubbleOverlayPreviewSourceKey = '';
           bubbleOverlayLayer.classList.add('is-hidden');
           bubbleOverlayLayer.classList.remove('preview-overlay-layer--interactive');
         }
@@ -3268,6 +3333,15 @@
       } catch (error) {
         showSceneStatus(error.message || 'ベース画像の保存に失敗しました。', 'error');
       }
+    });
+    backgroundPickerToggle?.addEventListener('click', () => {
+      backgroundPicker?.classList.toggle('is-hidden');
+    });
+    backgroundPicker?.addEventListener('click', (event) => {
+      const item = event.target.closest('[data-background-filename]');
+      if (!item) return;
+      selectBackgroundImage(item.dataset.backgroundFilename || '', item.dataset.backgroundUrl || '');
+      backgroundPicker.classList.add('is-hidden');
     });
     addCharacterSlotButton?.addEventListener('click', () => addCharacterSlot());
     removeCharacterSlotButton?.addEventListener('click', () => removeLastCharacterSlot());
