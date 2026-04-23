@@ -987,6 +987,57 @@ class SmokeRouteTest(unittest.TestCase):
         finally:
             response.close()
 
+    def test_scene_preview_returns_text_rotation_layout(self) -> None:
+        base_path = appmod.BACKGROUND_IMAGE_LIBRARY_DIR / "base.jpg"
+        portrait_path = appmod.PORTRAIT_OUTPUTS_DIR / "A.png"
+        Image.new("RGB", (64, 64), (255, 255, 255)).save(base_path, format="JPEG")
+        Image.new("RGBA", (16, 16), (255, 0, 0, 255)).save(portrait_path)
+
+        scene_data = {
+            "base_image_name": "base.jpg",
+            "canvas_preset": "16:9",
+            "base_fit_mode": "contain",
+            "character_slot_count": "1",
+            "character1_enabled": "1",
+            "portrait_filename": "A.png",
+            "text_slot_count": "1",
+            "text_enabled": "1",
+            "text_value": "rotated",
+            "text_x": "10",
+            "text_y": "20",
+            "text_size": "32",
+            "text_rotation": "30",
+            "text_color": "#000000",
+            "text_stroke_color": "#000000",
+            "text_stroke_width": "0",
+            "layer_order": json.dumps(["base_image", "character1", "text1"]),
+        }
+
+        response = self.client.post("/api/scene_preview", data=scene_data)
+
+        try:
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            text_layout = payload["layout"]["text"]
+            self.assertEqual(text_layout["rotation"], 30.0)
+            self.assertIn("rotated_text_box_rect", text_layout)
+            self.assertGreater(
+                text_layout["rotated_text_box_rect"]["height"],
+                text_layout["text_box_rect"]["height"],
+            )
+        finally:
+            response.close()
+
+        response = self.client.post("/api/scene", data=scene_data)
+        try:
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            self.assertTrue(payload["image_url"].startswith("/outputs/scene/"))
+        finally:
+            response.close()
+
     def test_normalizes_overlay_layers_as_primary_scene_state(self) -> None:
         Image.new("RGBA", (20, 20), (255, 0, 0, 255)).save(appmod.OVERLAY_IMAGE_LIBRARY_DIR / "red.png")
         appmod.OVERLAY_ASSETS_METADATA_PATH.write_text(

@@ -740,6 +740,7 @@
         debugInput: refs.debugInput || document.getElementById(getTextDomId(slotNumber, 'debug-layout')),
         xInput: refs.xInput || document.getElementById(getTextDomId(slotNumber, 'x')),
         yInput: refs.yInput || document.getElementById(getTextDomId(slotNumber, 'y')),
+        rotationInput: refs.rotationInput || document.getElementById(getTextDomId(slotNumber, 'rotation')),
         layer: refs.layer || document.getElementById(slotNumber === 1 ? 'text-layer' : `text-layer-${slotNumber}`),
         content: refs.content || document.getElementById(slotNumber === 1 ? 'text-content' : `text-content-${slotNumber}`),
         contentBox: refs.contentBox || document.getElementById(slotNumber === 1 ? 'text-content-box' : `text-content-box-${slotNumber}`),
@@ -747,6 +748,7 @@
         defaultX: slotNumber === 1 ? '0' : '100',
         defaultY: slotNumber === 1 ? '0' : '100',
         defaultSize: slotNumber === 1 ? '32' : '64',
+        defaultRotation: '0',
       };
     }
 
@@ -912,6 +914,23 @@
         positionRow.appendChild(field);
       });
 
+      const rotationRow = document.createElement('div');
+      rotationRow.className = 'row row--2';
+      const rotationField = document.createElement('div');
+      rotationField.className = 'field';
+      const rotationLabel = document.createElement('label');
+      rotationLabel.htmlFor = getTextDomId(slot.slot, 'rotation');
+      rotationLabel.textContent = '回転';
+      const rotationInput = document.createElement('input');
+      rotationInput.id = getTextDomId(slot.slot, 'rotation');
+      rotationInput.name = `${slot.key}_rotation`;
+      rotationInput.type = 'number';
+      rotationInput.value = slot.defaultRotation;
+      rotationInput.step = '1';
+      rotationField.appendChild(rotationLabel);
+      rotationField.appendChild(rotationInput);
+      rotationRow.appendChild(rotationField);
+
       const toggleRow = document.createElement('div');
       toggleRow.className = 'toggle-row';
       const strokeField = document.createElement('div');
@@ -973,6 +992,7 @@
       body.appendChild(fontField);
       body.appendChild(sizeColorRow);
       body.appendChild(positionRow);
+      body.appendChild(rotationRow);
       body.appendChild(toggleRow);
       body.appendChild(strokeRow);
       block.appendChild(header);
@@ -992,6 +1012,7 @@
       slot.debugInput = document.getElementById(getTextDomId(slot.slot, 'debug-layout'));
       slot.xInput = document.getElementById(getTextDomId(slot.slot, 'x'));
       slot.yInput = document.getElementById(getTextDomId(slot.slot, 'y'));
+      slot.rotationInput = document.getElementById(getTextDomId(slot.slot, 'rotation'));
     }
 
     function getBubbleOverlayAsset(assetId) {
@@ -2004,6 +2025,7 @@
         x: slot.xInput?.value || slot.defaultX,
         y: slot.yInput?.value || slot.defaultY,
         size: slot.sizeInput?.value || slot.defaultSize,
+        rotation: slot.rotationInput?.value || slot.defaultRotation,
         color: slot.colorInput?.value || '#ffffff',
         stroke_enabled: Boolean(slot.strokeEnabledInput?.checked),
         stroke_color: slot.strokeColorInput?.value || '#000000',
@@ -2039,6 +2061,9 @@
       }
       if (slot.sizeInput && textState.size) {
         slot.sizeInput.value = String(textState.size);
+      }
+      if (slot.rotationInput) {
+        slot.rotationInput.value = textState.rotation !== undefined ? String(textState.rotation) : slot.defaultRotation;
       }
       if (slot.colorInput && typeof textState.color === 'string') {
         slot.colorInput.value = textState.color;
@@ -2891,6 +2916,31 @@
       layer.style.height = `${height}px`;
     }
 
+    function normalizeTextRotation(value) {
+      const rotation = Number(value);
+      return Number.isFinite(rotation) ? rotation : 0;
+    }
+
+    function buildRotatedTextRect(rect, rotation) {
+      const width = Math.max(1, Number(rect?.width || 1));
+      const height = Math.max(1, Number(rect?.height || 1));
+      const left = Number(rect?.x || 0);
+      const top = Number(rect?.y || 0);
+      const radians = normalizeTextRotation(rotation) * Math.PI / 180;
+      const cos = Math.abs(Math.cos(radians));
+      const sin = Math.abs(Math.sin(radians));
+      const rotatedWidth = Math.max(1, Math.ceil(width * cos + height * sin));
+      const rotatedHeight = Math.max(1, Math.ceil(width * sin + height * cos));
+      const centerX = left + width / 2;
+      const centerY = top + height / 2;
+      return {
+        x: Math.round(centerX - rotatedWidth / 2),
+        y: Math.round(centerY - rotatedHeight / 2),
+        width: rotatedWidth,
+        height: rotatedHeight,
+      };
+    }
+
     function setLayerPosition(layer, left, top) {
       if (!layer) return;
       layer.style.left = `${left}px`;
@@ -3113,12 +3163,16 @@
         layer.style.removeProperty('top');
         layer.style.removeProperty('width');
         layer.style.removeProperty('height');
+        layer.style.removeProperty('transform');
+        layer.style.removeProperty('transform-origin');
       }
       if (contentBox) {
         contentBox.style.removeProperty('left');
         contentBox.style.removeProperty('top');
         contentBox.style.removeProperty('width');
         contentBox.style.removeProperty('height');
+        contentBox.style.removeProperty('transform');
+        contentBox.style.removeProperty('transform-origin');
       }
       setDebugRect(debugRect, null, false);
       layer?.classList.add('is-hidden');
@@ -3161,8 +3215,6 @@
       const textSize = getPreviewTextSize(slot);
       const strokeWidth = getPreviewTextStrokeWidth(slot);
       const fontName = slot.fontInput?.value || '';
-      layer.style.left = `${Math.round(Number(slot.xInput?.value || 0) * previewScaleFactor)}px`;
-      layer.style.top = `${Math.round(Number(slot.yInput?.value || 0) * previewScaleFactor)}px`;
       content.textContent = slot.valueInput.value || '';
       content.style.fontSize = `${textSize}px`;
       content.style.lineHeight = `${getPreviewTextLineHeight(textSize)}px`;
@@ -3173,8 +3225,8 @@
       content.style.fontFamily = fontName ? `"${buildPreviewFontFamily(fontName)}", sans-serif` : '';
       content.style.textAlign = 'left';
       contentBox.style.position = 'absolute';
-      contentBox.style.left = '0px';
-      contentBox.style.top = '0px';
+      contentBox.style.transform = 'none';
+      contentBox.style.transformOrigin = 'center center';
       layer.classList.remove('is-hidden');
       updateImmediateTextLayerRect(slot);
     }
@@ -3190,15 +3242,21 @@
         setDebugRect(debugRect, null, false);
         return;
       }
-      const layerLeft = textBoxRect.x || 0;
-      const layerTop = textBoxRect.y || 0;
-      setLayerRect(layer, layerLeft, layerTop, textBoxRect.width || 1, textBoxRect.height || 1);
+      const rotation = normalizeTextRotation(layout.rotation);
+      const rotatedTextBoxRect = layout.rotated_text_box_rect || buildRotatedTextRect(textBoxRect, rotation);
+      const layerLeft = rotatedTextBoxRect.x || 0;
+      const layerTop = rotatedTextBoxRect.y || 0;
+      setLayerRect(layer, layerLeft, layerTop, rotatedTextBoxRect.width || 1, rotatedTextBoxRect.height || 1);
+      contentBox.style.left = `${(textBoxRect.x || 0) - layerLeft}px`;
+      contentBox.style.top = `${(textBoxRect.y || 0) - layerTop}px`;
       contentBox.style.width = `${textBoxRect.width || 1}px`;
       contentBox.style.height = `${textBoxRect.height || 1}px`;
+      contentBox.style.transform = `rotate(${rotation}deg)`;
+      contentBox.style.transformOrigin = 'center center';
       if (content && layout.resolved_font) {
         content.style.fontFamily = `"${buildPreviewFontFamily(layout.resolved_font)}", sans-serif`;
       }
-      setDebugRect(debugRect, textBoxRect, Boolean(slot.debugInput?.checked), layerLeft, layerTop);
+      setDebugRect(debugRect, rotatedTextBoxRect, Boolean(slot.debugInput?.checked), layerLeft, layerTop);
     }
 
     function renderTextPreviewLayer(slot) {
@@ -3439,6 +3497,13 @@
       target.xInput.value = String(x);
       target.yInput.value = String(y);
       target.syncPreviewLayoutPosition?.(x, y);
+      if (isTextLayerId(target.layerId)) {
+        const textSlot = textSettingSlots.find((slot) => slot.layerId === target.layerId);
+        if (textSlot) {
+          renderTextPreviewLayer(textSlot);
+        }
+        return;
+      }
       setLayerPosition(
         target.layer,
         Math.round(x * previewScaleFactor),
@@ -3830,6 +3895,7 @@
       textBoxRect.y = Math.round(Number(yInput?.value || 0) * previewScaleFactor);
       textOrigin.x = textBoxRect.x + offsetX;
       textOrigin.y = textBoxRect.y + offsetY;
+      textLayout.rotated_text_box_rect = buildRotatedTextRect(textBoxRect, textLayout.rotation || 0);
     }
 
     function syncImmediatePreviewLayoutFromInputs() {
@@ -3860,17 +3926,28 @@
     function updateImmediateTextLayerRect(slot) {
       if (!slot.layer || !slot.contentBox) return;
       const contentRect = slot.content?.getBoundingClientRect();
-      const width = Math.max(1, Math.ceil(contentRect?.width || Number(slot.layer.style.width.replace('px', '')) || 1));
-      const height = Math.max(1, Math.ceil(contentRect?.height || Number(slot.layer.style.height.replace('px', '')) || 1));
-      slot.layer.style.width = `${width}px`;
-      slot.layer.style.height = `${height}px`;
+      const width = Math.max(1, Math.ceil(slot.content?.scrollWidth || contentRect?.width || Number(slot.layer.style.width.replace('px', '')) || 1));
+      const height = Math.max(1, Math.ceil(slot.content?.scrollHeight || contentRect?.height || Number(slot.layer.style.height.replace('px', '')) || 1));
+      const textBoxRect = {
+        x: Math.round(Number(slot.xInput?.value || 0) * previewScaleFactor),
+        y: Math.round(Number(slot.yInput?.value || 0) * previewScaleFactor),
+        width,
+        height,
+      };
+      const rotation = normalizeTextRotation(slot.rotationInput?.value || slot.defaultRotation);
+      const rotatedTextBoxRect = buildRotatedTextRect(textBoxRect, rotation);
+      setLayerRect(slot.layer, rotatedTextBoxRect.x, rotatedTextBoxRect.y, rotatedTextBoxRect.width, rotatedTextBoxRect.height);
+      slot.contentBox.style.left = `${textBoxRect.x - rotatedTextBoxRect.x}px`;
+      slot.contentBox.style.top = `${textBoxRect.y - rotatedTextBoxRect.y}px`;
       slot.contentBox.style.width = `${width}px`;
       slot.contentBox.style.height = `${height}px`;
+      slot.contentBox.style.transform = `rotate(${rotation}deg)`;
+      slot.contentBox.style.transformOrigin = 'center center';
       if (slot.debugRect && slot.debugInput?.checked) {
         slot.debugRect.style.left = '0px';
         slot.debugRect.style.top = '0px';
-        slot.debugRect.style.width = `${width}px`;
-        slot.debugRect.style.height = `${height}px`;
+        slot.debugRect.style.width = `${rotatedTextBoxRect.width}px`;
+        slot.debugRect.style.height = `${rotatedTextBoxRect.height}px`;
         slot.debugRect.classList.add('is-visible');
       } else {
         slot.debugRect?.classList.remove('is-visible');
@@ -4088,14 +4165,15 @@
         element === slot.strokeColorInput ||
         element === slot.debugInput ||
         element === slot.xInput ||
-        element === slot.yInput
+        element === slot.yInput ||
+        element === slot.rotationInput
       )) || null;
     }
 
     function registerTextSlotEvents(slot) {
       if (!slot || slot.eventsRegistered) return;
       slot.eventsRegistered = true;
-      [slot.colorInput, slot.strokeColorInput, slot.xInput, slot.yInput].forEach((element) => {
+      [slot.colorInput, slot.strokeColorInput, slot.xInput, slot.yInput, slot.rotationInput].forEach((element) => {
         element?.addEventListener('change', () => {
           markPreviewInputsChanged();
           requestCommittedPreviewUpdate();
@@ -4376,6 +4454,7 @@
           textBoxRect.y = Math.round(y * previewScaleFactor);
           textOrigin.x = textBoxRect.x + offsetX;
           textOrigin.y = textBoxRect.y + offsetY;
+          textLayout.rotated_text_box_rect = buildRotatedTextRect(textBoxRect, textLayout.rotation || 0);
         },
       };
     }

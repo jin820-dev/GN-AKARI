@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import hashlib
+import math
 import re
 import secrets
 import shutil
@@ -1593,6 +1594,12 @@ def load_scene_text_input(prefix: str = "text") -> dict:
     stroke_color = (request.form.get(f"{prefix}_stroke_color") or "#000000").strip() or "#000000"
     stroke_width = int(request.form.get(f"{prefix}_stroke_width", "2"))
     font_name = (request.form.get(f"{prefix}_font") or "").strip()
+    try:
+        rotation = float(request.form.get(f"{prefix}_rotation") or "0")
+    except (TypeError, ValueError):
+        rotation = 0.0
+    if not math.isfinite(rotation):
+        rotation = 0.0
 
     if size <= 0:
         raise ValueError(f"{prefix}_size must be greater than 0.")
@@ -1619,6 +1626,7 @@ def load_scene_text_input(prefix: str = "text") -> dict:
         "stroke_enabled": stroke_enabled,
         "stroke_color": stroke_color,
         "stroke_width": stroke_width,
+        "rotation": rotation,
         "font": font_name,
         "font_path": font_path,
     }
@@ -2082,6 +2090,24 @@ def build_scene_overlay_layer_layouts(overlay_layers: list[dict], position_scale
     return layouts
 
 
+def build_rotated_text_box_rect(text_box_rect: dict, rotation: float) -> dict:
+    width = max(1, float(text_box_rect["width"]))
+    height = max(1, float(text_box_rect["height"]))
+    left = float(text_box_rect["x"])
+    top = float(text_box_rect["y"])
+    radians = math.radians(rotation)
+    rotated_width = max(1, math.ceil(width * abs(math.cos(radians)) + height * abs(math.sin(radians))))
+    rotated_height = max(1, math.ceil(width * abs(math.sin(radians)) + height * abs(math.cos(radians))))
+    center_x = left + width / 2
+    center_y = top + height / 2
+    return {
+        "x": round(center_x - rotated_width / 2),
+        "y": round(center_y - rotated_height / 2),
+        "width": rotated_width,
+        "height": rotated_height,
+    }
+
+
 def build_scene_text_layout(
     draw: ImageDraw.ImageDraw,
     *,
@@ -2113,22 +2139,26 @@ def build_scene_text_layout(
         origin_x + text_layout["draw_offset_x"],
         origin_y + text_layout["draw_offset_y"],
     )
+    text_box_rect = {
+        "x": origin_x,
+        "y": origin_y,
+        "width": text_layout["width"],
+        "height": text_layout["height"],
+    }
+    rotation = float(text.get("rotation") or 0.0)
     return {
         "text_origin": {
             "x": text_origin[0],
             "y": text_origin[1],
         },
-        "text_box_rect": {
-            "x": origin_x,
-            "y": origin_y,
-            "width": text_layout["width"],
-            "height": text_layout["height"],
-        },
+        "text_box_rect": text_box_rect,
+        "rotated_text_box_rect": build_rotated_text_box_rect(text_box_rect, rotation),
         "wrapped_text": draw_text_value,
         "text_align": "left",
         "text_size": text_size,
         "line_spacing": spacing,
         "stroke_width": stroke_for_text,
+        "rotation": rotation,
         "resolved_font": resolved_font_path.name if resolved_font_path is not None else "",
     }
 
@@ -2286,8 +2316,35 @@ def draw_scene_text(result: Image.Image, text: dict, position_scale: float) -> N
     resolved_font_name = text_layout.get("resolved_font") or ""
     resolved_font_path = resolve_font_file_path(resolved_font_name) if resolved_font_name else None
     font = load_scene_text_font(text, text_layout["text_size"], resolved_font_path)
-    draw.multiline_text(
-        (text_layout["text_origin"]["x"], text_layout["text_origin"]["y"]),
+    rotation = float(text_layout.get("rotation") or 0.0)
+    if rotation % 360 == 0:
+        draw.multiline_text(
+            (text_layout["text_origin"]["x"], text_layout["text_origin"]["y"]),
+            text_layout["wrapped_text"],
+            fill=text["color"],
+            font=font,
+            spacing=text_layout["line_spacing"],
+            align=text_layout["text_align"],
+            stroke_width=text_layout["stroke_width"],
+            stroke_fill=text["stroke_color"] if text["stroke_enabled"] else None,
+        )
+        return
+
+    text_box_rect = text_layout["text_box_rect"]
+    text_layer = Image.new(
+        "RGBA",
+        (
+            max(1, int(text_box_rect["width"])),
+            max(1, int(text_box_rect["height"])),
+        ),
+        (0, 0, 0, 0),
+    )
+    text_layer_draw = ImageDraw.Draw(text_layer)
+    text_layer_draw.multiline_text(
+        (
+            text_layout["text_origin"]["x"] - text_box_rect["x"],
+            text_layout["text_origin"]["y"] - text_box_rect["y"],
+        ),
         text_layout["wrapped_text"],
         fill=text["color"],
         font=font,
@@ -2295,6 +2352,16 @@ def draw_scene_text(result: Image.Image, text: dict, position_scale: float) -> N
         align=text_layout["text_align"],
         stroke_width=text_layout["stroke_width"],
         stroke_fill=text["stroke_color"] if text["stroke_enabled"] else None,
+    )
+    rotated_text_layer = text_layer.rotate(-rotation, expand=True, resample=Image.Resampling.BICUBIC)
+    center_x = text_box_rect["x"] + text_box_rect["width"] / 2
+    center_y = text_box_rect["y"] + text_box_rect["height"] / 2
+    result.alpha_composite(
+        rotated_text_layer,
+        (
+            round(center_x - rotated_text_layer.width / 2),
+            round(center_y - rotated_text_layer.height / 2),
+        ),
     )
 
 
