@@ -18,6 +18,7 @@ const previewLayerStack = document.getElementById('preview-layer-stack');
 const previewDataElement = document.getElementById('preview-data');
 const reflectedLayerSignatureElement = document.getElementById('reflected-layer-signature');
 const previewLinkRow = document.getElementById('preview-link-row');
+const previewLink = document.getElementById('preview-link');
 const previewNote = document.getElementById('preview-note');
 const previewStage = document.getElementById('preview-stage');
 const previewEmpty = document.getElementById('preview-empty');
@@ -463,15 +464,14 @@ function savePreset() {
   showStatus(`プリセット「${name}」を保存しました。`);
 }
 
-function runAutoCompose(requestId, checkedLayerIds) {
+async function runAutoCompose(requestId, checkedLayerIds) {
   if (requestId !== latestComposeRequestId) return;
   if (!cacheKey || !previewLayerStack || !previewData?.layers) return;
 
   const selectedLayerIds = new Set(checkedLayerIds.map(Number));
-  const selectedLayers = previewData.layers.filter((layer) => selectedLayerIds.has(Number(layer.id)));
   previewLayerStack.replaceChildren();
 
-  if (selectedLayers.length === 0) {
+  if (selectedLayerIds.size === 0) {
     previewStage?.classList.add('is-hidden');
     previewEmpty?.classList.remove('is-hidden');
     previewLinkRow?.classList.add('is-hidden');
@@ -479,18 +479,45 @@ function runAutoCompose(requestId, checkedLayerIds) {
     return;
   }
 
-  selectedLayers.forEach((layer) => {
-    const image = document.createElement('img');
-    image.src = layer.png_url;
-    image.alt = '';
-    image.draggable = false;
-    previewLayerStack.appendChild(image);
-  });
-
   previewEmpty?.classList.add('is-hidden');
   previewStage?.classList.remove('is-hidden');
   previewLinkRow?.classList.add('is-hidden');
-  showPreviewNote('');
+  showPreviewNote('プレビュー更新中...', 'loading');
+
+  try {
+    const response = await fetch('/api/compose', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        cache_key: cacheKey,
+        checked_ids: checkedLayerIds,
+      }),
+    });
+    const data = await response.json();
+    if (requestId !== latestComposeRequestId) return;
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || 'プレビュー更新に失敗しました。');
+    }
+
+    const image = document.createElement('img');
+    image.src = `${data.image_url}?t=${Date.now()}`;
+    image.alt = '';
+    image.draggable = false;
+    previewLayerStack.appendChild(image);
+    if (previewLink) {
+      previewLink.href = data.image_url;
+      previewLink.textContent = data.image_url.replace('/outputs/', '');
+    }
+    lastReflectedComposeSignature = buildLayerIdsSignature(checkedLayerIds);
+    showPreviewNote('');
+  } catch (error) {
+    if (requestId !== latestComposeRequestId) return;
+    previewStage?.classList.add('is-hidden');
+    previewEmpty?.classList.remove('is-hidden');
+    showPreviewNote(error.message || 'プレビュー更新に失敗しました。', 'error');
+  }
 }
 
 function logPendingComposeRemove(reason) {
@@ -646,9 +673,11 @@ function scheduleAutoCompose() {
     clearTimeout(autoComposeTimer);
   }
   const requestId = ++latestComposeRequestId;
-  autoComposeTimer = null;
   lastSubmittedComposeSignature = composeSignature;
-  runAutoCompose(requestId, checkedLayerIds);
+  autoComposeTimer = setTimeout(() => {
+    autoComposeTimer = null;
+    runAutoCompose(requestId, checkedLayerIds);
+  }, 300);
 }
 
 document.querySelectorAll('[data-toggle]').forEach((button) => {

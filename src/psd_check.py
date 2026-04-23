@@ -30,6 +30,13 @@ def build_source_path(psd_path: Path, actual_path: Path) -> str:
     return str(relative_path.parent / actual_path.name)
 
 
+def normalize_blend_mode(blend_mode: object) -> str:
+    value = str(blend_mode or "normal").strip().lower()
+    if "." in value:
+        value = value.rsplit(".", 1)[-1]
+    return value or "normal"
+
+
 def save_layer_cache(layer, canvas_size: tuple[int, int], output_path: Path) -> None:
     canvas = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     image = layer.topil()
@@ -60,6 +67,8 @@ def build_layers(items, parent_id, parent_path, depth, nodes, layers_dir, cache_
             "name": layer.name,
             "type": "group" if is_group else "layer",
             "visible": layer.is_visible(),
+            "blend_mode": normalize_blend_mode(getattr(layer, "blend_mode", None)),
+            "opacity": getattr(layer, "opacity", 255),
             "depth": depth,
             "parent_id": parent_id,
             "children": [],

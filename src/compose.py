@@ -3,14 +3,17 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import logging
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUTS_DIR = ROOT_DIR / "outputs"
 OUTPUT_KINDS = ("preview", "portrait", "composite")
+LOGGER = logging.getLogger(__name__)
+COMPOSE_METADATA_VERSION = "blend-mode-v1"
 
 
 def relative_to_root(path: Path) -> str:
@@ -44,6 +47,62 @@ def validate_layer(layer_id: int, layer: dict) -> Path:
     if not cache_png.exists():
         raise FileNotFoundError(f"cache_png not found for layer id {layer_id}: {cache_png}")
     return cache_png
+
+
+def normalize_blend_mode(blend_mode: object) -> str:
+    value = str(blend_mode or "normal").strip().lower()
+    if "." in value:
+        value = value.rsplit(".", 1)[-1]
+    return value or "normal"
+
+
+def apply_layer_opacity(image: Image.Image, opacity: object) -> Image.Image:
+    try:
+        opacity_value = int(opacity)
+    except (TypeError, ValueError):
+        return image
+
+    opacity_value = max(0, min(255, opacity_value))
+    if opacity_value == 255:
+        return image
+
+    adjusted = image.copy()
+    alpha = adjusted.getchannel("A").point(lambda value: round(value * opacity_value / 255))
+    adjusted.putalpha(alpha)
+    return adjusted
+
+
+def alpha_composite_multiply(canvas: Image.Image, source: Image.Image) -> Image.Image:
+    backdrop = canvas.convert("RGBA")
+    source = source.convert("RGBA")
+
+    backdrop_rgb = backdrop.convert("RGB")
+    source_rgb = source.convert("RGB")
+    source_alpha = source.getchannel("A")
+
+    multiplied_rgb = ImageChops.multiply(backdrop_rgb, source_rgb)
+    blended_source_rgb = Image.composite(multiplied_rgb, source_rgb, backdrop.getchannel("A"))
+    blended_source = blended_source_rgb.convert("RGBA")
+    blended_source.putalpha(source_alpha)
+
+    result = backdrop.copy()
+    result.alpha_composite(blended_source)
+    return result
+
+
+def composite_layer(canvas: Image.Image, image: Image.Image, layer: dict) -> Image.Image:
+    image = apply_layer_opacity(image, layer.get("opacity"))
+    blend_mode = normalize_blend_mode(layer.get("blend_mode"))
+
+    if blend_mode in {"normal", "pass_through"}:
+        canvas.alpha_composite(image)
+        return canvas
+    if blend_mode == "multiply":
+        return alpha_composite_multiply(canvas, image)
+
+    LOGGER.warning("unsupported PSD blend_mode '%s'; using normal alpha composite", blend_mode)
+    canvas.alpha_composite(image)
+    return canvas
 
 
 def ensure_output_dirs(outputs_root: Path) -> None:
@@ -117,7 +176,7 @@ def composite_layers(layers_json_path: Path, layer_ids: list[int]) -> tuple[Imag
                 "cannot be composited correctly."
             )
 
-        canvas.alpha_composite(image)
+        canvas = composite_layer(canvas, image, layer)
 
     return canvas, payload
 
@@ -130,6 +189,7 @@ def build_metadata(payload: dict, layers_json_path: Path, layer_ids: list[int], 
         "cache_key": psd_source["cache_key"],
         "layers_json": relative_to_root(layers_json_path),
         "layer_ids": layer_ids,
+        "compose_version": COMPOSE_METADATA_VERSION,
         "created_at": created_at,
     }
 

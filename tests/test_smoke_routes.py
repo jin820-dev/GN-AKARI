@@ -710,6 +710,7 @@ class SmokeRouteTest(unittest.TestCase):
         self.assertTrue((appmod.PREVIEW_OUTPUTS_DIR / f"{cache_key}.png").exists())
         metadata = json.loads((appmod.PREVIEW_OUTPUTS_DIR / f"{cache_key}.json").read_text(encoding="utf-8"))
         self.assertEqual(metadata["layer_ids"], [1])
+        self.assertEqual(metadata["compose_version"], composemod.COMPOSE_METADATA_VERSION)
 
         response = self.client.get(f"/api/compose_status?cache_key={cache_key}")
         try:
@@ -721,6 +722,171 @@ class SmokeRouteTest(unittest.TestCase):
             self.assertEqual(payload["image_url"], f"/outputs/preview/{cache_key}.png")
         finally:
             response.close()
+
+    def test_compose_api_rebuilds_stale_preview_metadata(self) -> None:
+        cache_key = "psd_cccccccccccc"
+        cache_dir = appmod.CACHE_DIR / cache_key
+        layer_dir = cache_dir / "layers"
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        layers_json_path = cache_dir / "layers.json"
+        layer_path = layer_dir / "1.png"
+        Image.new("RGBA", (1, 1), (10, 20, 30, 255)).save(layer_path)
+        layers_json_path.write_text(
+            json.dumps(
+                {
+                    "psd_source": {
+                        "path": "data/psd/test.psd",
+                        "filename": "test.psd",
+                        "cache_key": cache_key,
+                    },
+                    "canvas": {"width": 1, "height": 1},
+                    "layers": [
+                        {
+                            "id": 1,
+                            "name": "layer",
+                            "type": "layer",
+                            "visible": True,
+                            "blend_mode": "normal",
+                            "opacity": 255,
+                            "depth": 0,
+                            "parent_id": None,
+                            "cache_png": str(layer_path),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        appmod.PREVIEW_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (1, 1), (255, 0, 0, 255)).save(appmod.PREVIEW_OUTPUTS_DIR / f"{cache_key}.png")
+        (appmod.PREVIEW_OUTPUTS_DIR / f"{cache_key}.json").write_text(
+            json.dumps({"layer_ids": [1], "compose_version": "old"}),
+            encoding="utf-8",
+        )
+
+        response = self.client.post(
+            "/api/compose",
+            json={"cache_key": cache_key, "checked_ids": [1]},
+        )
+
+        try:
+            payload = response.get_json()
+            self.assertEqual(response.status_code, 200, payload)
+            self.assertTrue(payload["ok"])
+            metadata = json.loads((appmod.PREVIEW_OUTPUTS_DIR / f"{cache_key}.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["compose_version"], composemod.COMPOSE_METADATA_VERSION)
+            with Image.open(appmod.PREVIEW_OUTPUTS_DIR / f"{cache_key}.png") as image:
+                self.assertEqual(image.convert("RGBA").getpixel((0, 0)), (10, 20, 30, 255))
+        finally:
+            response.close()
+
+    def test_composite_layers_supports_multiply_blend_mode(self) -> None:
+        cache_key = "psd_multiply"
+        cache_dir = appmod.CACHE_DIR / cache_key
+        layer_dir = cache_dir / "layers"
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        base_path = layer_dir / "1.png"
+        shadow_path = layer_dir / "2.png"
+        second_shadow_path = layer_dir / "3.png"
+        layers_json_path = cache_dir / "layers.json"
+        Image.new("RGBA", (1, 1), (200, 100, 50, 255)).save(base_path)
+        Image.new("RGBA", (1, 1), (128, 128, 128, 255)).save(shadow_path)
+        Image.new("RGBA", (1, 1), (128, 128, 128, 255)).save(second_shadow_path)
+        layers_json_path.write_text(
+            json.dumps(
+                {
+                    "psd_source": {
+                        "path": "data/psd/test.psd",
+                        "filename": "test.psd",
+                        "cache_key": cache_key,
+                    },
+                    "canvas": {"width": 1, "height": 1},
+                    "layers": [
+                        {
+                            "id": 1,
+                            "name": "base",
+                            "type": "layer",
+                            "visible": True,
+                            "blend_mode": "normal",
+                            "opacity": 255,
+                            "depth": 0,
+                            "parent_id": None,
+                            "cache_png": str(base_path),
+                        },
+                        {
+                            "id": 2,
+                            "name": "shadow",
+                            "type": "layer",
+                            "visible": True,
+                            "blend_mode": "multiply",
+                            "opacity": 255,
+                            "depth": 0,
+                            "parent_id": None,
+                            "cache_png": str(shadow_path),
+                        },
+                        {
+                            "id": 3,
+                            "name": "second-shadow",
+                            "type": "layer",
+                            "visible": True,
+                            "blend_mode": "multiply",
+                            "opacity": 255,
+                            "depth": 0,
+                            "parent_id": None,
+                            "cache_png": str(second_shadow_path),
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        image, _ = composemod.composite_layers(layers_json_path, [1, 2])
+
+        self.assertEqual(image.getpixel((0, 0)), (100, 50, 25, 255))
+
+        image, _ = composemod.composite_layers(layers_json_path, [1, 2, 3])
+
+        self.assertEqual(image.getpixel((0, 0)), (50, 25, 12, 255))
+
+    def test_composite_layers_applies_layer_opacity(self) -> None:
+        cache_key = "psd_opacity"
+        cache_dir = appmod.CACHE_DIR / cache_key
+        layer_dir = cache_dir / "layers"
+        layer_dir.mkdir(parents=True, exist_ok=True)
+        layer_path = layer_dir / "1.png"
+        layers_json_path = cache_dir / "layers.json"
+        Image.new("RGBA", (1, 1), (255, 0, 0, 255)).save(layer_path)
+        layers_json_path.write_text(
+            json.dumps(
+                {
+                    "psd_source": {
+                        "path": "data/psd/test.psd",
+                        "filename": "test.psd",
+                        "cache_key": cache_key,
+                    },
+                    "canvas": {"width": 1, "height": 1},
+                    "layers": [
+                        {
+                            "id": 1,
+                            "name": "half",
+                            "type": "layer",
+                            "visible": True,
+                            "blend_mode": "normal",
+                            "opacity": 128,
+                            "depth": 0,
+                            "parent_id": None,
+                            "cache_png": str(layer_path),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        image, _ = composemod.composite_layers(layers_json_path, [1])
+
+        self.assertEqual(image.getpixel((0, 0)), (255, 0, 0, 128))
 
     def test_cached_layer_route_serves_only_layer_png(self) -> None:
         cache_key = "psd_aaaaaaaaaaaa"

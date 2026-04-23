@@ -30,6 +30,7 @@ from bubble_assets import (
     save_registered_overlay_asset_records,
 )
 from compose import (
+    COMPOSE_METADATA_VERSION,
     build_metadata as build_compose_metadata,
     build_output_paths as build_compose_output_paths,
     composite_layers as composite_cached_layers,
@@ -620,12 +621,20 @@ def list_preview_sources() -> list[dict]:
             continue
 
         preview_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.png"
+        preview_metadata_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.json"
+        preview_available = False
+        if preview_path.exists() and preview_metadata_path.exists():
+            try:
+                preview_metadata = load_layers_json(preview_metadata_path)
+                preview_available = preview_metadata.get("compose_version") == COMPOSE_METADATA_VERSION
+            except (json.JSONDecodeError, OSError):
+                preview_available = False
         sources.append(
             {
                 "cache_key": cache_key,
                 "psd_filename": psd_source.get("filename", cache_key),
-                "preview_available": preview_path.exists(),
-                "preview_url": f"/outputs/preview/{cache_key}.png" if preview_path.exists() else None,
+                "preview_available": preview_available,
+                "preview_url": f"/outputs/preview/{cache_key}.png" if preview_available else None,
             }
         )
 
@@ -1330,10 +1339,28 @@ def load_preview_layer_signature(cache_key: str | None) -> str:
 
     try:
         preview_metadata = load_layers_json(preview_json_path)
+        if preview_metadata.get("compose_version") != COMPOSE_METADATA_VERSION:
+            return ""
         layer_ids = [int(layer_id) for layer_id in preview_metadata.get("layer_ids", [])]
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return ""
     return ",".join(str(layer_id) for layer_id in sorted(layer_ids))
+
+
+def ensure_preview_image_current(cache_key: str) -> None:
+    preview_json_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.json"
+    if load_preview_layer_signature(cache_key):
+        return
+    if not preview_json_path.exists():
+        return
+
+    preview_metadata = load_layers_json(preview_json_path)
+    layer_ids = [str(int(layer_id)) for layer_id in preview_metadata.get("layer_ids", [])]
+    if not layer_ids:
+        return
+
+    layers_json_path = CACHE_DIR / cache_key / "layers.json"
+    execute_compose(layers_json_path, layer_ids, "preview")
 
 
 def sanitize_portrait_name(name: str) -> str | None:
@@ -1505,6 +1532,7 @@ def load_scene_character_input(
     if portrait_path is None:
         if not cache_key:
             raise ValueError(f"{slot_name}_cache_key or {slot_name}_portrait_filename is required.")
+        ensure_preview_image_current(cache_key)
         portrait_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.png"
         portrait_source = cache_key
         if not portrait_path.exists():
@@ -2838,7 +2866,7 @@ def compose_api():
         if not selected_layer_ids:
             raise ValueError("checked_ids must contain at least one layer id.")
 
-        layers_json_path = ROOT_DIR / "cache" / cache_key / "layers.json"
+        layers_json_path = CACHE_DIR / cache_key / "layers.json"
         payload = load_layers_json(layers_json_path)
         ordered_layer_ids = order_layer_ids_for_compose(payload["layers"], selected_layer_ids)
         preview_png_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.png"
@@ -2847,7 +2875,10 @@ def compose_api():
             try:
                 preview_metadata = load_layers_json(preview_json_path)
                 previous_layer_ids = [str(int(layer_id)) for layer_id in preview_metadata.get("layer_ids", [])]
-                if previous_layer_ids == ordered_layer_ids:
+                if (
+                    preview_metadata.get("compose_version") == COMPOSE_METADATA_VERSION
+                    and previous_layer_ids == ordered_layer_ids
+                ):
                     return jsonify(
                         {
                             "ok": True,
@@ -2872,13 +2903,14 @@ def compose_status_api():
 
         preview_png_path = PREVIEW_OUTPUTS_DIR / f"{cache_key}.png"
         signature = load_preview_layer_signature(cache_key)
+        preview_available = preview_png_path.exists() and bool(signature)
         return jsonify(
             {
                 "ok": True,
                 "cache_key": cache_key,
                 "signature": signature,
-                "preview_available": preview_png_path.exists(),
-                "image_url": f"/outputs/{preview_png_path.relative_to(OUTPUTS_DIR)}" if preview_png_path.exists() else "",
+                "preview_available": preview_available,
+                "image_url": f"/outputs/{preview_png_path.relative_to(OUTPUTS_DIR)}" if preview_available else "",
             }
         )
     except ValueError as exc:
@@ -2904,7 +2936,7 @@ def save_portrait_api():
         if not selected_layer_ids:
             raise ValueError("checked_ids must contain at least one layer id.")
 
-        layers_json_path = ROOT_DIR / "cache" / cache_key / "layers.json"
+        layers_json_path = CACHE_DIR / cache_key / "layers.json"
         output_image = execute_compose(
             layers_json_path,
             selected_layer_ids,
