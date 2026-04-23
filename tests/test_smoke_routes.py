@@ -339,6 +339,9 @@ class SmokeRouteTest(unittest.TestCase):
             self.assertIn('data-gallery-select-toggle="overlay"', body)
             self.assertIn('data-gallery-bulk-delete="overlay"', body)
             self.assertIn('data-gallery-select="overlay"', body)
+            self.assertIn('data-overlay-asset="bubble"', body)
+            self.assertIn("data-overlay-slot-menu", body)
+            self.assertIn("toggleOverlaySlotMenu(this)", body)
             self.assertIn('onclick="deleteGalleryImage(\'overlay\', this.dataset.filename)"', body)
         finally:
             response.close()
@@ -817,6 +820,125 @@ class SmokeRouteTest(unittest.TestCase):
             self.assertIn("text3", payload["layout"]["layer_order"])
         finally:
             response.close()
+
+    def test_normalizes_overlay_layers_as_primary_scene_state(self) -> None:
+        Image.new("RGBA", (20, 20), (255, 0, 0, 255)).save(appmod.OVERLAY_IMAGE_LIBRARY_DIR / "red.png")
+        appmod.OVERLAY_ASSETS_METADATA_PATH.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "red",
+                        "label": "Red",
+                        "filename": "red.png",
+                        "default_width": 20,
+                        "default_height": 20,
+                        "kind": "image",
+                        "created_at": "2026-04-22T12:00:00",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        layers = appmod.normalize_scene_overlay_layers_state(
+            {
+                "overlay_layers": [
+                    {"id": "top", "name": "Top", "asset_id": "missing", "visible": True, "x": 1, "y": 2, "width": 30, "height": 40, "order": 1},
+                    {"id": "bottom", "name": "Bottom", "asset_id": "red", "visible": True, "x": 3, "y": 4, "width": 50, "height": 60, "order": 0},
+                ],
+                "overlay_slots": [
+                    {"slot_id": "slot_1", "asset_id": "red", "visible": True, "order": 0},
+                ],
+            }
+        )
+
+        self.assertEqual([layer["id"] for layer in layers], ["bottom", "top"])
+        self.assertEqual([layer["order"] for layer in layers], [0, 1])
+        self.assertEqual(layers[0]["asset_id"], "red")
+        self.assertIsNone(layers[1]["asset_id"])
+        self.assertFalse(layers[1]["visible"])
+
+        empty_layers = appmod.normalize_scene_overlay_layers_state({"overlay_layers": []})
+        self.assertEqual(empty_layers, [])
+
+        layer_order = appmod.normalize_scene_layer_order(
+            ["base_image", "overlay_image", "text1"],
+            extra_layer_ids=["overlay:bottom", "overlay:top"],
+        )
+        self.assertNotIn("overlay_image", layer_order)
+        self.assertEqual(layer_order[1:3], ["overlay:bottom", "overlay:top"])
+
+    def test_compose_scene_draws_overlay_layers_from_layer_order(self) -> None:
+        Image.new("RGBA", (20, 20), (255, 0, 0, 255)).save(appmod.OVERLAY_IMAGE_LIBRARY_DIR / "red.png")
+        Image.new("RGBA", (20, 20), (0, 0, 255, 255)).save(appmod.OVERLAY_IMAGE_LIBRARY_DIR / "blue.png")
+        appmod.OVERLAY_ASSETS_METADATA_PATH.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "red",
+                        "label": "Red",
+                        "filename": "red.png",
+                        "default_width": 20,
+                        "default_height": 20,
+                        "kind": "image",
+                        "created_at": "2026-04-22T12:00:00",
+                    },
+                    {
+                        "id": "blue",
+                        "label": "Blue",
+                        "filename": "blue.png",
+                        "default_width": 20,
+                        "default_height": 20,
+                        "kind": "image",
+                        "created_at": "2026-04-22T12:01:00",
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = appmod.compose_scene(
+            Image.new("RGBA", (1280, 720), (255, 255, 255, 255)),
+            [],
+            [],
+            {"enabled": True, "x": 0, "y": 0, "width": 40, "height": 40, "color": "#00ff00", "opacity": 1.0},
+            [
+                {
+                    "id": "blue_layer",
+                    "name": "Blue Layer",
+                    "asset_id": "blue",
+                    "visible": True,
+                    "x": 0,
+                    "y": 0,
+                    "width": 20,
+                    "height": 20,
+                    "order": 0,
+                },
+                {
+                    "id": "red_layer",
+                    "name": "Red Layer",
+                    "asset_id": "red",
+                    "visible": True,
+                    "x": 0,
+                    "y": 0,
+                    "width": 20,
+                    "height": 20,
+                    "order": 1,
+                },
+            ],
+            ["base_image", "overlay:blue_layer", "message_band", "overlay:red_layer"],
+            "aviutl",
+            "16:9",
+            "contain",
+            100,
+            0,
+            0,
+            preview=False,
+        )
+
+        self.assertEqual(result.getpixel((5, 5)), (255, 0, 0, 255))
 
 
 if __name__ == "__main__":

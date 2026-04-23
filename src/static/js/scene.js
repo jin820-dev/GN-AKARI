@@ -12,6 +12,9 @@
       : 1;
     const initialBaseImageName = sceneBootstrap.initialBaseImageName || '';
     const initialBaseImageUrl = sceneBootstrap.initialBaseImageUrl || '';
+    const initialSceneUrl = new URL(window.location.href);
+    let initialOverlayAssetId = initialSceneUrl.searchParams.get('overlay_asset') || '';
+    let initialOverlaySlotId = initialSceneUrl.searchParams.get('overlay_slot') || 'slot_2';
     const sceneStorageKey = 'gn_akari_scene_state';
     const portraitLayoutStorageKey = 'gn_akari_scene_portrait_layouts';
     const sceneUiStateStorageKey = 'gn_akari_scene_ui_state';
@@ -41,6 +44,8 @@
     const portraitLayer2 = document.getElementById('portrait-layer-2');
     const portraitLayer3 = document.getElementById('portrait-layer-3');
     const bubbleOverlayLayer = document.getElementById('bubble-overlay-layer');
+    const bubbleOverlayLayer2 = document.getElementById('bubble-overlay-layer-2');
+    const bubbleOverlayLayer3 = document.getElementById('bubble-overlay-layer-3');
     const bubbleOverlayResizeHandleRight = document.getElementById('bubble-overlay-resize-handle-right');
     const bubbleOverlayResizeHandleBottom = document.getElementById('bubble-overlay-resize-handle-bottom');
     const bubbleDebugRect = document.getElementById('bubble-debug-rect');
@@ -61,6 +66,167 @@
 
     function appendText(parent, text) {
       parent.appendChild(document.createTextNode(text));
+    }
+
+    function getDefaultLayerName(layerId) {
+      const overlayId = getOverlayLayerIdFromKey(layerId);
+      if (overlayId) {
+        const layer = getOverlayLayerControl(overlayId);
+        const index = overlayLayerControls.indexOf(layer);
+        return layer?.name || `Overlay ${index >= 0 ? index + 1 : 1}`;
+      }
+      const textMatch = String(layerId || '').match(/^text(\d+)$/);
+      if (textMatch) return `テキスト${textMatch[1]}`;
+      const characterMatch = String(layerId || '').match(/^character(\d+)$/);
+      if (characterMatch) return `キャラ${characterMatch[1]}`;
+      const labels = {
+        base_image: 'ベース画像',
+        message_band: 'メッセージ帯',
+      };
+      return labels[layerId] || String(layerId || '');
+    }
+
+    function getLayerBlock(layerId) {
+      return sceneForm?.querySelector(`.settings-block[data-layer-id="${CSS.escape(layerId)}"]`) || null;
+    }
+
+    function getLayerTitleElement(layerId) {
+      return getLayerBlock(layerId)?.querySelector('.settings-block-title') || null;
+    }
+
+    function setLayerDisplayName(layerId, name, { save = true } = {}) {
+      if (!layerId) return;
+      const nextName = String(name || '').trim() || getDefaultLayerName(layerId);
+      currentLayerNames[layerId] = nextName;
+      const title = getLayerTitleElement(layerId);
+      if (title) {
+        title.textContent = nextName;
+      }
+
+      const overlayId = getOverlayLayerIdFromKey(layerId);
+      if (overlayId) {
+        const layer = getOverlayLayerControl(overlayId);
+        if (layer) {
+          layer.name = nextName;
+          if (layer.selectButton) {
+            layer.selectButton.textContent = nextName;
+          }
+          if (layer.layer) {
+            layer.layer.alt = `${nextName} preview`;
+          }
+          updateOverlayLayersInput();
+        }
+      }
+
+      if (save) {
+        saveSceneState();
+      }
+    }
+
+    function finishLayerRename(layerId, { cancel = false } = {}) {
+      const state = layerRenameStates.get(layerId);
+      if (!state) return;
+      const { input, title, previousName } = state;
+      const nextName = cancel ? previousName : input.value;
+      input.replaceWith(title);
+      layerRenameStates.delete(layerId);
+      setLayerDisplayName(layerId, nextName);
+    }
+
+    function beginLayerRename(layerId) {
+      if (!layerId || layerRenameStates.has(layerId)) return;
+      const title = getLayerTitleElement(layerId);
+      if (!title) return;
+      const previousName = currentLayerNames[layerId] || title.textContent || getDefaultLayerName(layerId);
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'layer-title-rename-input settings-block-title';
+      input.value = previousName;
+      input.setAttribute('aria-label', 'レイヤー名');
+      input.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+      input.addEventListener('pointerdown', (event) => {
+        event.stopPropagation();
+      });
+      input.addEventListener('keydown', (event) => {
+        event.stopPropagation();
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          finishLayerRename(layerId);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          finishLayerRename(layerId, { cancel: true });
+        }
+      });
+      input.addEventListener('blur', () => {
+        finishLayerRename(layerId);
+      });
+      title.replaceWith(input);
+      layerRenameStates.set(layerId, { input, title, previousName });
+      setActiveLayer(layerId);
+      const overlayId = getOverlayLayerIdFromKey(layerId);
+      if (overlayId) {
+        setActiveOverlayLayer(overlayId);
+      }
+      input.focus();
+      input.select();
+    }
+
+    function createLayerRenameControl(layerId) {
+      const button = document.createElement('span');
+      button.className = 'layer-rename-control';
+      button.setAttribute('role', 'button');
+      button.tabIndex = 0;
+      button.title = 'レイヤー名を変更';
+      button.dataset.layerRename = layerId;
+      button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4Z"/><path d="M13 7l4 4"/></svg>';
+      const handleRename = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        beginLayerRename(layerId);
+      };
+      button.addEventListener('click', handleRename);
+      button.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        handleRename(event);
+      });
+      return button;
+    }
+
+    function initializeLayerRenameControls() {
+      sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
+        const layerId = block.dataset.layerId;
+        const headerMain = block.querySelector('.settings-block-header-main');
+        const title = headerMain?.querySelector('.settings-block-title');
+        if (!layerId || !headerMain || !title || headerMain.querySelector('.layer-rename-control')) return;
+        headerMain.insertBefore(createLayerRenameControl(layerId), title);
+      });
+    }
+
+    function applyLayerNames(layerNames = {}) {
+      currentLayerNames = layerNames && typeof layerNames === 'object' ? { ...layerNames } : {};
+      sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
+        const layerId = block.dataset.layerId || '';
+        setLayerDisplayName(layerId, currentLayerNames[layerId] || getDefaultLayerName(layerId), { save: false });
+      });
+    }
+
+    function buildLayerNamesState() {
+      const names = {};
+      sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
+        const layerId = block.dataset.layerId || '';
+        const title = block.querySelector('.settings-block-title');
+        const titleValue = title?.matches('input') ? title.value : title?.textContent;
+        const name = String(currentLayerNames[layerId] || titleValue || '').trim();
+        if (layerId && name) {
+          names[layerId] = name;
+        }
+      });
+      overlayLayerControls.forEach((layer) => {
+        names[getOverlayLayerKey(layer.id)] = layer.name;
+      });
+      return names;
     }
 
     function createCharacterSlotBlock(slotDef) {
@@ -344,6 +510,9 @@
     const bubbleOverlayWidthInput = document.getElementById('bubble-overlay-width');
     const bubbleOverlayHeightInput = document.getElementById('bubble-overlay-height');
     const overlayAssetPanel = document.getElementById('overlay-asset-panel');
+    const overlayLayersInput = document.getElementById('overlay-layers-input');
+    const overlayLayerList = document.getElementById('overlay-layer-list');
+    const addOverlayLayerButton = document.getElementById('add-overlay-layer');
     let previewTimer = null;
     let latestPreviewRequestId = 0;
     let previewInputRevision = 0;
@@ -358,15 +527,21 @@
     let baseObjectUrlFile = null;
     let currentBasePreviewSourceKey = '';
     let currentBubbleOverlayPreviewSourceKey = '';
+    const currentOverlayPreviewSourceKeys = {};
     let restoredBaseImageUrl = '';
     let indexedDbBaseImageBlob = null;
     let sceneBaseImageDbPromise = null;
     let latestPreviewLayout = null;
     let lastBubbleOverlayAssetValue = bubbleOverlayAssetInput?.value || '';
-    const defaultLayerOrder = ['base_image', 'message_band', 'character1', 'character2', 'character3', 'overlay_image', 'text2', 'text1'];
+    let activeOverlayLayerId = 'overlay_1';
+    let overlayDragTarget = null;
+    const legacyOverlayLayerId = 'overlay_image';
+    const defaultLayerOrder = ['base_image', 'message_band', 'character1', 'character2', 'character3', 'text2', 'text1'];
     let currentLayerOrder = [...defaultLayerOrder];
     let currentLayerOrderMode = 'aviutl';
     let currentLayerLocks = {};
+    let currentLayerNames = {};
+    const layerRenameStates = new Map();
     const loadedPreviewFonts = new Set();
     let loadedTextFontItems = [];
     const minimumCharacterSlotCount = 1;
@@ -400,6 +575,10 @@
 
     function getCharacterStateKey(slot, field) {
       return slot.stateKeys[field];
+    }
+
+    function getCharacterNameStateKey(slot) {
+      return `character${slot.slot}_name`;
     }
 
     function getActivePortraitLayoutKey(slot) {
@@ -494,6 +673,7 @@
         removeTextSlotButton.disabled = textSettingSlots.length <= minimumTextSlotCount;
       }
       updateTextSlotCountInput();
+      updateLayerDeleteControls();
     }
 
     function ensureTextSlotCount(slotCount) {
@@ -515,6 +695,7 @@
       if (removeCharacterSlotButton) {
         removeCharacterSlotButton.disabled = characterSlots.length <= minimumCharacterSlotCount;
       }
+      updateLayerDeleteControls();
     }
 
     function getPortraitFilenameBeforePreviewSelection(slot) {
@@ -822,26 +1003,582 @@
       return Object.keys(bubbleOverlayAssets)[0] || '';
     }
 
-    function currentOverlaySizeUsesAssetDefault(assetId) {
-      const asset = getBubbleOverlayAsset(assetId);
-      if (!asset || !bubbleOverlayWidthInput || !bubbleOverlayHeightInput) return false;
-      return Number(bubbleOverlayWidthInput.value) === Number(asset.default_width)
-        && Number(bubbleOverlayHeightInput.value) === Number(asset.default_height);
+    const overlayLayerDefaults = [
+      { id: 'overlay_1', name: 'Overlay 1', asset_id: null, visible: true, x: 0, y: 0, width: 320, height: 180, order: 0 },
+      { id: 'overlay_2', name: 'Overlay 2', asset_id: null, visible: true, x: 0, y: 0, width: 320, height: 180, order: 1 },
+      { id: 'overlay_3', name: 'Overlay 3', asset_id: null, visible: true, x: 0, y: 0, width: 320, height: 180, order: 2 },
+    ];
+    let overlayLayerControls = [];
+
+    function getOverlayLayerKey(layerId) {
+      return `overlay:${layerId}`;
     }
 
-    function applySelectedOverlayAssetDefaults(previousAssetId) {
-      const selectedAsset = getBubbleOverlayAsset(bubbleOverlayAssetInput?.value);
-      if (!selectedAsset || !bubbleOverlayWidthInput || !bubbleOverlayHeightInput) return;
+    function getOverlayLayerIdFromKey(layerKey) {
+      return String(layerKey || '').startsWith('overlay:') ? String(layerKey).slice('overlay:'.length) : '';
+    }
 
-      const widthIsUnset = !bubbleOverlayWidthInput.value || Number(bubbleOverlayWidthInput.value) <= 0;
-      const heightIsUnset = !bubbleOverlayHeightInput.value || Number(bubbleOverlayHeightInput.value) <= 0;
-      const sizeWasInitial = Number(bubbleOverlayWidthInput.value) === 420
-        && Number(bubbleOverlayHeightInput.value) === 180;
-      const sizeWasPreviousDefault = currentOverlaySizeUsesAssetDefault(previousAssetId);
+    function isOverlayLayerKey(layerKey) {
+      return Boolean(getOverlayLayerIdFromKey(layerKey));
+    }
+
+    function getOrderedOverlayLayerKeys() {
+      return getOrderedOverlayLayerControls().map((layer) => getOverlayLayerKey(layer.id));
+    }
+
+    function createOverlayLayerId() {
+      if (window.crypto?.randomUUID) {
+        return `overlay_${window.crypto.randomUUID()}`;
+      }
+      return `overlay_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    function buildOverlayAssetOptions(selectedAssetId = '') {
+      const fragment = document.createDocumentFragment();
+      const emptyOption = document.createElement('option');
+      emptyOption.value = '';
+      emptyOption.textContent = '未選択';
+      fragment.appendChild(emptyOption);
+      Object.entries(bubbleOverlayAssets).forEach(([assetId, asset]) => {
+        const option = document.createElement('option');
+        option.value = assetId;
+        option.textContent = asset.label || assetId;
+        option.selected = assetId === selectedAssetId;
+        fragment.appendChild(option);
+      });
+      return fragment;
+    }
+
+    function parseOverlayLayerBoolean(value, fallback) {
+      if (value === true || value === '1' || value === 'true' || value === 'on') return true;
+      if (value === false || value === '0' || value === 'false' || value === 'off') return false;
+      return fallback;
+    }
+
+    function parseOverlayLayerNumber(value, fallback, minimum = null) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      const rounded = Math.round(parsed);
+      return minimum === null ? rounded : Math.max(minimum, rounded);
+    }
+
+    function legacyOverlayAnchorOrder(anchor, fallbackOrder) {
+      const anchorOrder = {
+        before_message_band: 0,
+        after_message_band: 1,
+        before_characters: 2,
+        after_characters: 3,
+        before_text: 4,
+        after_text: 5,
+      };
+      return Number.isFinite(anchorOrder[anchor]) ? anchorOrder[anchor] : fallbackOrder;
+    }
+
+    function normalizeOverlayLayer(rawLayer, defaultLayer, index) {
+      const source = rawLayer && typeof rawLayer === 'object' ? rawLayer : {};
+      const rawAssetId = String(source.asset_id ?? source.asset ?? '').trim();
+      const assetId = rawAssetId && getBubbleOverlayAsset(rawAssetId) ? rawAssetId : null;
+      const visible = rawAssetId && !assetId
+        ? false
+        : parseOverlayLayerBoolean(source.visible ?? source.enabled, defaultLayer.visible);
+
+      return {
+        id: String(source.id || source.slot_id || defaultLayer.id || createOverlayLayerId()),
+        name: typeof source.name === 'string' && source.name.trim()
+          ? source.name
+          : String(source.label || defaultLayer.name || `Overlay ${index + 1}`),
+        asset_id: assetId,
+        visible,
+        x: parseOverlayLayerNumber(source.x, defaultLayer.x),
+        y: parseOverlayLayerNumber(source.y, defaultLayer.y),
+        width: parseOverlayLayerNumber(source.width, defaultLayer.width, 1),
+        height: parseOverlayLayerNumber(source.height, defaultLayer.height, 1),
+        order: parseOverlayLayerNumber(source.order, legacyOverlayAnchorOrder(source.layer_anchor, index), 0),
+      };
+    }
+
+    function normalizeOverlayLayerOrders(layers) {
+      const seenIds = new Set();
+      return layers
+        .map((layer, index) => ({ ...layer, originalIndex: index }))
+        .sort((a, b) => (a.order - b.order) || (a.originalIndex - b.originalIndex))
+        .map((layer, order) => {
+          const { originalIndex, ...rest } = layer;
+          let layerId = String(rest.id || '').trim() || createOverlayLayerId();
+          while (seenIds.has(layerId)) {
+            layerId = createOverlayLayerId();
+          }
+          seenIds.add(layerId);
+          return { ...rest, id: layerId, order };
+        });
+    }
+
+    function buildOverlayLayersFromLegacySlots(rawSlots) {
+      return rawSlots.map((slot, index) => ({
+        id: `overlay_${index + 1}`,
+        name: overlayLayerDefaults[index]?.name || `Overlay ${index + 1}`,
+        asset_id: slot?.asset_id ?? slot?.asset ?? null,
+        visible: slot?.visible ?? slot?.enabled,
+        x: slot?.x,
+        y: slot?.y,
+        width: slot?.width,
+        height: slot?.height,
+        order: legacyOverlayAnchorOrder(slot?.layer_anchor, index),
+      }));
+    }
+
+    function normalizeOverlayLayers(sceneState) {
+      const state = sceneState && typeof sceneState === 'object' ? { ...sceneState } : {};
+      let rawLayers = Array.isArray(state.overlay_layers) ? state.overlay_layers : null;
+      if (!rawLayers && Array.isArray(state.overlay_slots)) {
+        rawLayers = buildOverlayLayersFromLegacySlots(state.overlay_slots);
+      }
+      if (!rawLayers && state.bubble_overlay && typeof state.bubble_overlay === 'object') {
+        rawLayers = [{
+          id: 'overlay_1',
+          name: 'Overlay 1',
+          asset_id: state.bubble_overlay.asset_id ?? state.bubble_overlay.asset ?? null,
+          visible: state.bubble_overlay.visible ?? state.bubble_overlay.enabled,
+          x: state.bubble_overlay.x,
+          y: state.bubble_overlay.y,
+          width: state.bubble_overlay.width,
+          height: state.bubble_overlay.height,
+          order: legacyOverlayAnchorOrder(state.bubble_overlay.layer_anchor, 0),
+        }];
+      }
+      if (!rawLayers) {
+        rawLayers = overlayLayerDefaults;
+      }
+
+      state.overlay_layers = normalizeOverlayLayerOrders(rawLayers.map((rawLayer, index) =>
+        normalizeOverlayLayer(rawLayer, overlayLayerDefaults[index] || overlayLayerDefaults[0], index),
+      ));
+      delete state.bubble_overlay;
+      delete state.overlay_slots;
+      return state;
+    }
+
+    function getOverlayLayerControl(layerId) {
+      return overlayLayerControls.find((layer) => layer.id === layerId) || overlayLayerControls[0] || null;
+    }
+
+    function getOverlayLayerControlByOrder(order) {
+      const orderedControls = getOrderedOverlayLayerControls();
+      return orderedControls[order] || null;
+    }
+
+    function resolveOverlayLayerControlFromLegacySlot(slotId) {
+      const match = String(slotId || '').match(/^slot_(\d+)$/);
+      const index = match ? Math.max(0, Number(match[1]) - 1) : 1;
+      return getOverlayLayerControlByOrder(index)
+        || getOverlayLayerControlByOrder(1)
+        || overlayLayerControls[0]
+        || null;
+    }
+
+    function getOrderedOverlayLayerControls() {
+      return [...overlayLayerControls].sort((a, b) => (a.order - b.order) || (overlayLayerControls.indexOf(a) - overlayLayerControls.indexOf(b)));
+    }
+
+    function buildOverlayLayerStateFromControl(layer) {
+      return normalizeOverlayLayer({
+        id: layer.id,
+        name: layer.name,
+        asset_id: layer.assetInput?.value || null,
+        visible: Boolean(layer.enabledInput?.checked),
+        x: layer.xInput?.value ?? layer.x,
+        y: layer.yInput?.value ?? layer.y,
+        width: layer.widthInput?.value ?? layer.width,
+        height: layer.heightInput?.value ?? layer.height,
+        order: layer.order,
+      }, layer, overlayLayerControls.indexOf(layer));
+    }
+
+    function buildCurrentOverlayLayersState() {
+      return normalizeOverlayLayers({
+        overlay_layers: overlayLayerControls.map(buildOverlayLayerStateFromControl),
+      }).overlay_layers;
+    }
+
+    function updateOverlayLayersInput() {
+      if (overlayLayersInput) {
+        overlayLayersInput.value = JSON.stringify(buildCurrentOverlayLayersState());
+      }
+    }
+
+    function createOverlayNumberField(labelText, value, min = null) {
+      const field = document.createElement('div');
+      field.className = 'field';
+      const label = document.createElement('label');
+      label.textContent = labelText;
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.value = String(value);
+      if (min !== null) {
+        input.min = String(min);
+      }
+      field.appendChild(label);
+      field.appendChild(input);
+      return { field, input };
+    }
+
+    function createOverlayLayerControl(state) {
+      const layerKey = getOverlayLayerKey(state.id);
+      const layerImage = document.createElement('img');
+      layerImage.className = 'preview-overlay-layer is-hidden';
+      layerImage.alt = `${state.name || 'overlay'} preview`;
+      layerImage.dataset.overlayLayerPreview = state.id;
+      previewCanvas?.appendChild(layerImage);
+
+      const card = document.createElement('div');
+      card.className = 'settings-block overlay-layer-card';
+      card.dataset.sectionKey = layerKey;
+      card.dataset.layerId = layerKey;
+      card.dataset.overlayLayerCard = state.id;
+
+      const header = document.createElement('button');
+      header.type = 'button';
+      header.className = 'settings-block-header';
+      header.dataset.settingsToggle = layerKey;
+      header.setAttribute('aria-expanded', 'true');
+
+      const headerMain = document.createElement('span');
+      headerMain.className = 'settings-block-header-main';
+      const selectButton = document.createElement('h3');
+      selectButton.className = 'settings-block-title';
+      selectButton.dataset.overlayLayerSelect = state.id;
+      selectButton.setAttribute('aria-pressed', 'false');
+      selectButton.textContent = state.name;
+
+      const actions = document.createElement('span');
+      actions.className = 'settings-block-header-actions';
+      const visibleLabel = document.createElement('label');
+      visibleLabel.className = 'section-visible-toggle';
+      const enabledInput = document.createElement('input');
+      enabledInput.type = 'checkbox';
+      enabledInput.value = '1';
+      enabledInput.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+      const visibilityIcon = document.createElement('span');
+      visibilityIcon.className = 'visibility-icon';
+      visibilityIcon.setAttribute('aria-hidden', 'true');
+      visibleLabel.appendChild(enabledInput);
+      visibleLabel.appendChild(visibilityIcon);
+      visibleLabel.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+      const collapseToggle = document.createElement('span');
+      collapseToggle.className = 'settings-block-toggle';
+      collapseToggle.setAttribute('aria-hidden', 'true');
+      headerMain.appendChild(selectButton);
+
+      const deleteButton = document.createElement('span');
+      deleteButton.className = 'layer-drag-handle layer-delete-control overlay-layer-delete-button';
+      deleteButton.setAttribute('role', 'button');
+      deleteButton.tabIndex = 0;
+      deleteButton.title = 'Overlayレイヤーを削除';
+      deleteButton.dataset.overlayLayerDelete = state.id;
+      deleteButton.textContent = '×';
+      actions.appendChild(deleteButton);
+      actions.appendChild(visibleLabel);
+      actions.appendChild(collapseToggle);
+      orderHeaderActions(actions);
+      header.appendChild(headerMain);
+      header.appendChild(actions);
+
+      const assetField = document.createElement('div');
+      assetField.className = 'field';
+      const assetLabel = document.createElement('label');
+      assetLabel.textContent = '素材選択';
+      const assetInput = document.createElement('select');
+      assetInput.appendChild(buildOverlayAssetOptions(state.asset_id || ''));
+      assetField.appendChild(assetLabel);
+      assetField.appendChild(assetInput);
+
+      const rowPosition = document.createElement('div');
+      rowPosition.className = 'row row--2';
+      const xField = createOverlayNumberField('X', state.x);
+      const yField = createOverlayNumberField('Y', state.y);
+      rowPosition.appendChild(xField.field);
+      rowPosition.appendChild(yField.field);
+
+      const rowSize = document.createElement('div');
+      rowSize.className = 'row row--2';
+      const widthField = createOverlayNumberField('W', state.width, 1);
+      const heightField = createOverlayNumberField('H', state.height, 1);
+      rowSize.appendChild(widthField.field);
+      rowSize.appendChild(heightField.field);
+
+      const body = document.createElement('div');
+      body.className = 'settings-block-body settings-block-body--compact overlay-layer-body';
+      body.appendChild(assetField);
+      body.appendChild(rowPosition);
+      body.appendChild(rowSize);
+      card.appendChild(header);
+      card.appendChild(body);
+      if (sceneForm && sceneLayerListEnd) {
+        sceneForm.insertBefore(card, sceneLayerListEnd);
+      } else {
+        overlayLayerList?.appendChild(card);
+      }
+
+      const control = {
+        ...state,
+        layerKey,
+        card,
+        selectButton,
+        moveUpButton: null,
+        moveDownButton: null,
+        deleteButton,
+        nameInput: null,
+        enabledInput,
+        assetInput,
+        xInput: xField.input,
+        yInput: yField.input,
+        widthInput: widthField.input,
+        heightInput: heightField.input,
+        layer: layerImage,
+        sourceKey: '',
+      };
+      applyOverlayLayerStateToControl(control, state);
+      registerOverlayLayerEvents(control);
+      defaultSectionOpenState[layerKey] = true;
+      if (currentLayerLocks[layerKey] !== true) {
+        currentLayerLocks[layerKey] = false;
+      }
+      registerSectionToggle(header);
+      applyStoredSectionOpenState(layerKey);
+      return control;
+    }
+
+    function renderOverlayLayerControlsFromState(layers) {
+      overlayLayerControls.forEach((layer) => {
+        layer.card?.remove();
+        layer.layer?.remove();
+      });
+      overlayLayerControls = normalizeOverlayLayerOrders(layers).map(createOverlayLayerControl);
+      const activeExists = overlayLayerControls.some((layer) => layer.id === activeOverlayLayerId);
+      if (!activeExists && overlayLayerControls[0]) {
+        activeOverlayLayerId = overlayLayerControls[0].id;
+      }
+      currentLayerOrder = normalizeLayerOrder(currentLayerOrder);
+      syncOverlayLayerOrdersFromLayerOrder();
+      updateLayerOrderInput();
+      applyOverlayLayerOrderToUi();
+      initializeLayerOrderDrag();
+      initializeLayerMoveControls();
+      initializeLayerLockControls();
+      initializeLayerDeleteControls();
+      applyLayerOrderToSettingsBlocks();
+      syncOverlayDragTarget();
+      updateLayerLockControls();
+      updateOverlayLayersInput();
+      initializeLayerRenameControls();
+      applyLayerNames(currentLayerNames);
+    }
+
+    function applyOverlayLayerStateToControl(layer, state) {
+      layer.id = state.id;
+      layer.name = state.name;
+      layer.order = state.order;
+      if (layer.enabledInput) {
+        layer.enabledInput.checked = state.visible === true;
+        updateVisibilityIcon(layer.enabledInput);
+      }
+      if (layer.assetInput) {
+        layer.assetInput.value = state.asset_id || '';
+      }
+      if (layer.xInput) {
+        layer.xInput.value = String(state.x);
+      }
+      if (layer.yInput) {
+        layer.yInput.value = String(state.y);
+      }
+      if (layer.widthInput) {
+        layer.widthInput.value = String(state.width);
+      }
+      if (layer.heightInput) {
+        layer.heightInput.value = String(state.height);
+      }
+      if (layer.selectButton) {
+        layer.selectButton.textContent = state.name;
+      }
+    }
+
+    function updateOverlayLayerSelectionDisplay() {
+      const layerOrder = normalizeLayerOrder(currentLayerOrder);
+      overlayLayerControls.forEach((layer) => {
+        const active = layer.id === activeOverlayLayerId;
+        const layerOrderIndex = layerOrder.indexOf(getOverlayLayerKey(layer.id));
+        layer.card?.classList.toggle('is-active', active);
+        layer.card?.style.setProperty('--overlay-layer-order', String(layer.order));
+        layer.selectButton?.setAttribute('aria-pressed', active ? 'true' : 'false');
+        layer.layer?.classList.toggle('is-selected-layer', active && activeLayerId === getOverlayLayerKey(layer.id));
+        if (layer.moveUpButton) layer.moveUpButton.disabled = layerOrderIndex <= 0;
+        if (layer.moveDownButton) layer.moveDownButton.disabled = layerOrderIndex < 0 || layerOrderIndex >= layerOrder.length - 1;
+        if (layer.deleteButton) layer.deleteButton.removeAttribute('aria-disabled');
+      });
+    }
+
+    function syncOverlayDragTarget() {
+      const layer = getOverlayLayerControl(activeOverlayLayerId);
+      if (!layer || !overlayDragTarget) return;
+      overlayDragTarget.slot = layer.id;
+      overlayDragTarget.layerId = getOverlayLayerKey(layer.id);
+      overlayDragTarget.xInput = layer.xInput;
+      overlayDragTarget.yInput = layer.yInput;
+      overlayDragTarget.layer = layer.layer;
+      overlayDragTarget.layerControl = layer;
+    }
+
+    function setActiveOverlayLayer(layerId) {
+      if (!getOverlayLayerControl(layerId)) return;
+      activeOverlayLayerId = layerId;
+      syncOverlayDragTarget();
+      updateOverlayLayerSelectionDisplay();
+      renderScenePreviewLayers();
+    }
+
+    function syncOverlayLayerOrdersFromLayerOrder() {
+      const order = normalizeLayerOrder(currentLayerOrder);
+      getOrderedOverlayLayerControls().forEach((layer) => {
+        const index = order.indexOf(getOverlayLayerKey(layer.id));
+        layer.order = index >= 0 ? index : order.length;
+      });
+      normalizeOverlayLayerOrders(overlayLayerControls).forEach((normalizedLayer) => {
+        const layer = getOverlayLayerControl(normalizedLayer.id);
+        if (layer) {
+          layer.order = normalizedLayer.order;
+        }
+      });
+    }
+
+    function applyOverlayLayerOrderToUi() {
+      const list = overlayLayerList;
+      if (!list) {
+        updateOverlayLayerSelectionDisplay();
+        return;
+      }
+      getOrderedOverlayLayerControls().forEach((layer) => {
+        if (layer.card) {
+          list.appendChild(layer.card);
+        }
+      });
+      updateOverlayLayerSelectionDisplay();
+    }
+
+    function moveOverlayLayer(layerId, direction) {
+      currentLayerOrder = normalizeLayerOrder(currentLayerOrder);
+      const layerKey = getOverlayLayerKey(layerId);
+      const currentIndex = currentLayerOrder.indexOf(layerKey);
+      const offset = direction === 'up' ? -1 : 1;
+      const nextIndex = currentIndex + offset;
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= currentLayerOrder.length) return;
+      [currentLayerOrder[currentIndex], currentLayerOrder[nextIndex]] =
+        [currentLayerOrder[nextIndex], currentLayerOrder[currentIndex]];
+      syncOverlayLayerOrdersFromLayerOrder();
+      updateLayerOrderInput();
+      applyOverlayLayerOrderToUi();
+      updateOverlayLayersInput();
+      setActiveOverlayLayer(layerId);
+      setActiveLayer(layerKey);
+      applyLayerOrderToSettingsBlocks();
+      applyLayerOrderToPreviewDom();
+      saveSceneState();
+    }
+
+    function addOverlayLayer() {
+      const nextOrder = overlayLayerControls.length;
+      const nextLayer = normalizeOverlayLayer({
+        id: createOverlayLayerId(),
+        name: `Overlay ${nextOrder + 1}`,
+        asset_id: null,
+        visible: true,
+        x: 0,
+        y: 0,
+        width: 320,
+        height: 180,
+        order: nextOrder,
+      }, overlayLayerDefaults[0], nextOrder);
+      const control = createOverlayLayerControl(nextLayer);
+      overlayLayerControls.push(control);
+      currentLayerOrder = normalizeLayerOrder(currentLayerOrder);
+      const overlayKeys = getOrderedOverlayLayerKeys();
+      const lastOverlayIndex = Math.max(...overlayKeys.map((layerId) => currentLayerOrder.indexOf(layerId)).filter((index) => index >= 0), -1);
+      const insertIndex = lastOverlayIndex >= 0 ? lastOverlayIndex + 1 : currentLayerOrder.length;
+      currentLayerOrder.splice(insertIndex, 0, getOverlayLayerKey(control.id));
+      syncOverlayLayerOrdersFromLayerOrder();
+      updateLayerOrderInput();
+      applyOverlayLayerOrderToUi();
+      updateOverlayLayersInput();
+      setActiveOverlayLayer(control.id);
+      setActiveLayer(getOverlayLayerKey(control.id));
+      initializeLayerOrderDrag();
+      initializeLayerMoveControls();
+      initializeLayerLockControls();
+      initializeLayerDeleteControls();
+      applyLayerOrderToSettingsBlocks();
+      applyLayerOrderToPreviewDom();
+      renderScenePreviewLayers();
+      saveSceneState();
+    }
+
+    function deleteOverlayLayer(layerId) {
+      const orderedControls = getOrderedOverlayLayerControls();
+      const deleteIndex = orderedControls.findIndex((layer) => layer.id === layerId);
+      const target = orderedControls[deleteIndex];
+      if (!target) return;
+      target.card?.remove();
+      target.layer?.remove();
+      const deletedLayerKey = getOverlayLayerKey(layerId);
+      currentLayerOrder = normalizeLayerOrder(currentLayerOrder).filter((currentLayerId) => currentLayerId !== deletedLayerKey);
+      overlayLayerControls = overlayLayerControls.filter((layer) => layer.id !== layerId);
+      delete defaultSectionOpenState[deletedLayerKey];
+      delete currentLayerLocks[deletedLayerKey];
+      delete currentLayerNames[deletedLayerKey];
+      layerRenameStates.delete(deletedLayerKey);
+      syncOverlayLayerOrdersFromLayerOrder();
+      if (activeOverlayLayerId === layerId) {
+        const nextLayer = getOrderedOverlayLayerControls()[Math.min(deleteIndex, overlayLayerControls.length - 1)];
+        activeOverlayLayerId = nextLayer?.id || overlayLayerControls[0]?.id || '';
+      }
+      updateLayerOrderInput();
+      applyOverlayLayerOrderToUi();
+      updateOverlayLayersInput();
+      syncOverlayDragTarget();
+      setActiveLayer(activeOverlayLayerId ? getOverlayLayerKey(activeOverlayLayerId) : 'base_image');
+      applyLayerOrderToSettingsBlocks();
+      applyLayerOrderToPreviewDom();
+      renderScenePreviewLayers();
+      saveSceneState();
+    }
+
+    function currentOverlaySizeUsesAssetDefault(assetId, layer = getOverlayLayerControl(activeOverlayLayerId)) {
+      const asset = getBubbleOverlayAsset(assetId);
+      if (!asset || !layer?.widthInput || !layer?.heightInput) return false;
+      return Number(layer.widthInput.value) === Number(asset.default_width)
+        && Number(layer.heightInput.value) === Number(asset.default_height);
+    }
+
+    function applySelectedOverlayAssetDefaults(previousAssetId, layer = getOverlayLayerControl(activeOverlayLayerId)) {
+      const selectedAsset = getBubbleOverlayAsset(layer?.assetInput?.value);
+      if (!selectedAsset || !layer?.widthInput || !layer?.heightInput) return;
+
+      const widthIsUnset = !layer.widthInput.value || Number(layer.widthInput.value) <= 0;
+      const heightIsUnset = !layer.heightInput.value || Number(layer.heightInput.value) <= 0;
+      const sizeWasInitial = (
+        Number(layer.widthInput.value) === layer.width
+        && Number(layer.heightInput.value) === layer.height
+      ) || (
+        Number(layer.widthInput.value) === 420
+        && Number(layer.heightInput.value) === 180
+      );
+      const sizeWasPreviousDefault = currentOverlaySizeUsesAssetDefault(previousAssetId, layer);
       if (!widthIsUnset && !heightIsUnset && !sizeWasInitial && !sizeWasPreviousDefault) return;
 
-      bubbleOverlayWidthInput.value = String(selectedAsset.default_width);
-      bubbleOverlayHeightInput.value = String(selectedAsset.default_height);
+      layer.widthInput.value = String(selectedAsset.default_width);
+      layer.heightInput.value = String(selectedAsset.default_height);
     }
 
     function updateOverlaySourcePanels() {
@@ -851,21 +1588,62 @@
     function normalizeLayerOrder(order) {
       const rawOrder = Array.isArray(order) ? order : [];
       const known = new Set(defaultLayerOrder);
-      const normalized = rawOrder.filter((layerId, index) =>
-        known.has(layerId) && rawOrder.indexOf(layerId) === index,
-      );
+      const overlayKeys = getOrderedOverlayLayerKeys();
+      const knownOverlayKeys = new Set(overlayKeys);
+      const normalized = [];
+      let sawOverlayGroup = false;
+      let sawOverlayLayer = false;
+      rawOrder.forEach((rawLayerId) => {
+        const layerId = String(rawLayerId);
+        const insertLayer = (nextLayerId) => {
+          if (!normalized.includes(nextLayerId)) {
+            normalized.push(nextLayerId);
+          }
+        };
+        if (layerId === legacyOverlayLayerId) {
+          sawOverlayGroup = true;
+          overlayKeys.forEach(insertLayer);
+          return;
+        }
+        if (knownOverlayKeys.has(layerId)) {
+          sawOverlayLayer = true;
+          insertLayer(layerId);
+          return;
+        }
+        if (
+          known.has(layerId)
+          || /^character\d+$/.test(layerId)
+          || /^text\d+$/.test(layerId)
+        ) {
+          insertLayer(layerId);
+        }
+      });
       defaultLayerOrder.forEach((layerId) => {
         if (!normalized.includes(layerId)) {
           normalized.push(layerId);
         }
       });
+      if (!sawOverlayGroup && !sawOverlayLayer) {
+        const insertIndex = normalized.includes('character3')
+          ? normalized.indexOf('character3') + 1
+          : normalized.indexOf('text2') >= 0
+            ? normalized.indexOf('text2')
+            : normalized.length;
+        normalized.splice(insertIndex, 0, ...overlayKeys.filter((layerId) => !normalized.includes(layerId)));
+      } else {
+        overlayKeys.forEach((layerId) => {
+          if (!normalized.includes(layerId)) {
+            normalized.push(layerId);
+          }
+        });
+      }
       return normalized;
     }
 
     function normalizeLayerLocks(locks) {
       const normalized = {};
       const source = locks && typeof locks === 'object' && !Array.isArray(locks) ? locks : {};
-      defaultLayerOrder.forEach((layerId) => {
+      normalizeLayerOrder(currentLayerOrder).forEach((layerId) => {
         normalized[layerId] = source[layerId] === true;
       });
       return normalized;
@@ -918,17 +1696,25 @@
       updateLayerOrderModeInput();
     }
 
-    function getLayerBlock(layerId) {
-      return sceneForm?.querySelector(`.settings-block[data-layer-id="${layerId}"]`) || null;
-    }
-
     function getPreviewDragTarget(layerId) {
       if (!layerId) return null;
       const characterSlot = characterSlots.find((slot) => slot.layerId === layerId);
       if (characterSlot) return characterSlot;
       const textSlot = textSettingSlots.find((slot) => slot.layerId === layerId);
       if (textSlot) return textSlot.dragTarget || null;
-      if (layerId === 'overlay_image') return overlayDragTarget;
+      if (isOverlayLayerKey(layerId)) {
+        const layer = getOverlayLayerControl(getOverlayLayerIdFromKey(layerId));
+        if (!layer) return null;
+        return {
+          ...overlayDragTarget,
+          slot: layer.id,
+          layerId,
+          xInput: layer.xInput,
+          yInput: layer.yInput,
+          layer: layer.layer,
+          layerControl: layer,
+        };
+      }
       return null;
     }
 
@@ -979,11 +1765,12 @@
       sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
         block.classList.toggle('is-selected-layer', block.dataset.layerId === activeLayerId);
       });
-      defaultLayerOrder.forEach((layerId) => {
+      normalizeLayerOrder(currentLayerOrder).forEach((layerId) => {
         getPreviewLayerNodes(layerId).forEach((node) => {
           node.classList.toggle('is-selected-layer', layerId === activeLayerId);
         });
       });
+      updateOverlayLayerSelectionDisplay();
     }
 
     function setActiveLayer(layerId) {
@@ -1010,9 +1797,23 @@
     function updateLayerOrderFromSettingsBlocks() {
       const displayOrder = Array.from(sceneForm?.querySelectorAll('.settings-block[data-layer-id]') || [])
         .map((block) => block.dataset.layerId);
-      currentLayerOrder = normalizeLayerOrder(
-        currentLayerOrderMode === 'after_effects' ? [...displayOrder].reverse() : displayOrder,
-      );
+      const nextDrawOrder = currentLayerOrderMode === 'after_effects' ? [...displayOrder].reverse() : displayOrder;
+      const nextDrawOrderSet = new Set(nextDrawOrder);
+      let nextDrawOrderIndex = 0;
+      const mergedOrder = normalizeLayerOrder(currentLayerOrder).map((layerId) => {
+        if (!nextDrawOrderSet.has(layerId)) return layerId;
+        const nextLayerId = nextDrawOrder[nextDrawOrderIndex] || layerId;
+        nextDrawOrderIndex += 1;
+        return nextLayerId;
+      });
+      nextDrawOrder.slice(nextDrawOrderIndex).forEach((layerId) => {
+        if (!mergedOrder.includes(layerId)) {
+          mergedOrder.push(layerId);
+        }
+      });
+      currentLayerOrder = normalizeLayerOrder(mergedOrder);
+      syncOverlayLayerOrdersFromLayerOrder();
+      updateOverlayLayersInput();
       updateLayerOrderInput();
     }
 
@@ -1026,17 +1827,103 @@
 
       [currentLayerOrder[currentIndex], currentLayerOrder[nextIndex]] =
         [currentLayerOrder[nextIndex], currentLayerOrder[currentIndex]];
+      syncOverlayLayerOrdersFromLayerOrder();
+      updateOverlayLayersInput();
       updateLayerOrderInput();
       applyLayerOrderToSettingsBlocks();
       applyLayerOrderToPreviewDom();
       saveSceneState();
     }
 
+    function getDeletableLayerIds() {
+      const ids = new Set();
+      if (characterSlots.length > minimumCharacterSlotCount) {
+        const lastCharacter = characterSlots[characterSlots.length - 1];
+        if (lastCharacter?.layerId) ids.add(lastCharacter.layerId);
+      }
+      if (textSettingSlots.length > minimumTextSlotCount) {
+        const lastText = textSettingSlots[textSettingSlots.length - 1];
+        if (lastText?.layerId) ids.add(lastText.layerId);
+      }
+      return ids;
+    }
+
+    function deleteCharacterOrTextLayer(layerId) {
+      const deletableLayerIds = getDeletableLayerIds();
+      if (!deletableLayerIds.has(layerId)) return;
+      if (characterSlots[characterSlots.length - 1]?.layerId === layerId) {
+        removeLastCharacterSlot();
+        return;
+      }
+      if (textSettingSlots[textSettingSlots.length - 1]?.layerId === layerId) {
+        removeLastTextSlot();
+      }
+    }
+
+    function createLayerDeleteControl(layerId) {
+      const button = document.createElement('span');
+      button.className = 'layer-drag-handle layer-delete-control';
+      button.setAttribute('role', 'button');
+      button.tabIndex = 0;
+      button.title = 'レイヤーを削除';
+      button.dataset.layerDelete = layerId;
+      button.textContent = '×';
+      const handleDelete = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteCharacterOrTextLayer(layerId);
+      };
+      button.addEventListener('click', handleDelete);
+      button.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        handleDelete(event);
+      });
+      return button;
+    }
+
+    function initializeLayerDeleteControls() {
+      sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
+        const layerId = block.dataset.layerId;
+        if (
+          !layerId
+          || isOverlayLayerKey(layerId)
+          || (!/^character\d+$/.test(layerId) && !/^text\d+$/.test(layerId))
+        ) {
+          return;
+        }
+        const actions = block.querySelector('.settings-block-header-actions');
+        if (!actions || actions.querySelector('[data-layer-delete]')) return;
+        const collapseToggle = actions.querySelector('.settings-block-toggle');
+        actions.insertBefore(createLayerDeleteControl(layerId), collapseToggle || actions.firstChild);
+        orderHeaderActions(actions);
+      });
+      updateLayerDeleteControls();
+    }
+
+    function updateLayerDeleteControls() {
+      const deletableLayerIds = getDeletableLayerIds();
+      sceneForm?.querySelectorAll('[data-layer-delete]').forEach((button) => {
+        const layerId = button.dataset.layerDelete || '';
+        const visible = deletableLayerIds.has(layerId);
+        button.classList.toggle('is-hidden', !visible);
+        button.setAttribute('aria-hidden', visible ? 'false' : 'true');
+        button.tabIndex = visible ? 0 : -1;
+      });
+      orderAllHeaderActions();
+    }
+
     function getPreviewLayerNodes(layerId) {
+      if (isOverlayLayerKey(layerId)) {
+        const overlayLayer = getOverlayLayerControl(getOverlayLayerIdFromKey(layerId));
+        const nodes = [overlayLayer?.layer];
+        if (activeOverlayLayerId === overlayLayer?.id) {
+          nodes.push(bubbleOverlayResizeHandleRight, bubbleOverlayResizeHandleBottom, bubbleDebugRect);
+        }
+        return nodes.filter(Boolean);
+      }
       const layerMap = {
         base_image: [baseLayer],
         message_band: [messageBandLayer],
-        overlay_image: [bubbleOverlayLayer, bubbleOverlayResizeHandleRight, bubbleOverlayResizeHandleBottom, bubbleDebugRect],
       };
       characterSlots.forEach((slot) => {
         layerMap[slot.layerId] = [slot.layer];
@@ -1049,7 +1936,7 @@
 
     function updateLayerLockControls() {
       currentLayerLocks = normalizeLayerLocks(currentLayerLocks);
-      defaultLayerOrder.forEach((layerId) => {
+      normalizeLayerOrder(currentLayerOrder).forEach((layerId) => {
         const locked = currentLayerLocks[layerId] === true;
         const input = document.getElementById(`layer-lock-${layerId}`);
         const toggle = input?.closest('.layer-lock-toggle');
@@ -1066,6 +1953,21 @@
         });
       });
       updateActiveLayerDisplay();
+    }
+
+    function orderHeaderActions(actions) {
+      if (!actions) return;
+      const deleteControl = actions.querySelector('.layer-delete-control');
+      const visible = actions.querySelector('.section-visible-toggle');
+      const lock = actions.querySelector('.layer-lock-toggle');
+      const collapse = actions.querySelector('.settings-block-toggle');
+      [deleteControl, visible, lock, collapse].forEach((control) => {
+        if (control) actions.appendChild(control);
+      });
+    }
+
+    function orderAllHeaderActions() {
+      sceneForm?.querySelectorAll('.settings-block-header-actions').forEach(orderHeaderActions);
     }
 
     function updateVisibilityIcon(input) {
@@ -1208,6 +2110,7 @@
 
     function buildCharacterState(slot) {
       return {
+        [getCharacterNameStateKey(slot)]: currentLayerNames[slot.layerId] || getDefaultLayerName(slot.layerId),
         [getCharacterStateKey(slot, 'enabled')]: slot.enabledInput?.checked ? '1' : '0',
         [getCharacterStateKey(slot, 'cacheKey')]: slot.cacheKeyInput?.value || '',
         [getCharacterStateKey(slot, 'portraitFilename')]: slot.portraitFilenameInput?.value || '',
@@ -1224,6 +2127,10 @@
         || storedPortraitFilename
         || '';
       const storedCacheKey = stored[getCharacterStateKey(slot, 'cacheKey')] || '';
+      const storedName = stored[getCharacterNameStateKey(slot)] || '';
+      if (storedName && !currentLayerNames[slot.layerId]) {
+        currentLayerNames[slot.layerId] = storedName;
+      }
       setLastSelectedPortrait(slot, storedLastPortraitFilename);
       if (slot.enabledInput) {
         const storedEnabled = stored[getCharacterStateKey(slot, 'enabled')];
@@ -1274,21 +2181,13 @@
         layer_order: normalizeLayerOrder(currentLayerOrder),
         layer_order_mode: normalizeLayerOrderMode(currentLayerOrderMode),
         layer_locks: normalizeLayerLocks(currentLayerLocks),
+        layer_names: buildLayerNamesState(),
         ...textSettingSlots.reduce((payload, slot) => ({
           ...payload,
           [slot.key]: buildTextState(slot),
         }), {}),
         message_band: buildMessageBandState(),
-        bubble_overlay: {
-          enabled: Boolean(bubbleOverlayEnabledInput?.checked),
-          source_type: 'asset',
-          asset: bubbleOverlayAssetInput?.value || '',
-          upload_file: '',
-          x: bubbleOverlayXInput?.value || '180',
-          y: bubbleOverlayYInput?.value || '220',
-          width: bubbleOverlayWidthInput?.value || '420',
-          height: bubbleOverlayHeightInput?.value || '180',
-        },
+        overlay_layers: buildCurrentOverlayLayersState(),
       };
     }
 
@@ -1320,6 +2219,40 @@
       }
       initialPortraitFilename = '';
       initialPortraitSlot = 1;
+    }
+
+    function clearInitialOverlaySeed() {
+      const sceneUrl = new URL(window.location.href);
+      if (sceneUrl.searchParams.has('overlay_asset') || sceneUrl.searchParams.has('overlay_slot')) {
+        sceneUrl.searchParams.delete('overlay_asset');
+        sceneUrl.searchParams.delete('overlay_slot');
+        window.history.replaceState({}, '', `${sceneUrl.pathname}${sceneUrl.search}${sceneUrl.hash}`);
+      }
+      initialOverlayAssetId = '';
+      initialOverlaySlotId = 'slot_2';
+    }
+
+    function commitInitialOverlaySelection() {
+      if (!initialOverlayAssetId) return;
+      const asset = getBubbleOverlayAsset(initialOverlayAssetId);
+      const layer = resolveOverlayLayerControlFromLegacySlot(initialOverlaySlotId);
+      if (!asset || !layer?.assetInput) {
+        clearInitialOverlaySeed();
+        return;
+      }
+
+      const previousAssetId = layer.assetInput.value || '';
+      layer.assetInput.value = initialOverlayAssetId;
+      if (layer.enabledInput) {
+        layer.enabledInput.checked = true;
+        updateVisibilityIcon(layer.enabledInput);
+      }
+      applySelectedOverlayAssetDefaults(previousAssetId, layer);
+      updateOverlayLayersInput();
+      setActiveOverlayLayer(layer.id);
+      setActiveLayer(getOverlayLayerKey(layer.id));
+      saveSceneState();
+      clearInitialOverlaySeed();
     }
 
     function applyInitialPortraitToSlot(slot, filename) {
@@ -1363,12 +2296,19 @@
     }
 
     function applyStoredSceneState() {
-      const stored = loadSceneState();
-      if (!stored) {
+      const loadedState = loadSceneState();
+      if (!loadedState) {
+        renderOverlayLayerControlsFromState(normalizeOverlayLayers({}).overlay_layers);
+        initializeLayerRenameControls();
+        applyLayerNames({});
         commitInitialBaseImageSelection();
         commitInitialPortraitSelection();
         return;
       }
+      const stored = normalizeOverlayLayers(loadedState);
+      currentLayerNames = stored.layer_names && typeof stored.layer_names === 'object'
+        ? { ...stored.layer_names }
+        : {};
 
       syncCharacterSlotCount(getCharacterSlotCountFromState(stored));
       syncTextSlotCount(getTextSlotCountFromState(stored));
@@ -1405,13 +2345,6 @@
       if (baseFitModeSelect && stored.base_fit_mode && ['contain', 'cover'].includes(stored.base_fit_mode)) {
         baseFitModeSelect.value = stored.base_fit_mode;
       }
-      currentLayerOrderMode = loadLayerOrderMode(stored.layer_order_mode);
-      currentLayerOrder = normalizeLayerOrder(stored.layer_order);
-      currentLayerLocks = normalizeLayerLocks(stored.layer_locks);
-      updateLayerOrderInput();
-      updateLayerLockControls();
-      applyLayerOrderToSettingsBlocks();
-      applyLayerOrderToPreviewDom();
       textSettingSlots.forEach((slot) => {
         applyStoredTextState(slot, stored[slot.key] || {}, { enabledDefault: slot.slot === 1 });
       });
@@ -1438,36 +2371,27 @@
       if (messageBandOpacityInput && messageBand.opacity !== undefined) {
         messageBandOpacityInput.value = String(messageBand.opacity);
       }
-      const storedBubbleOverlay = stored.bubble_overlay || {};
+      const storedOverlayLayers = normalizeOverlayLayers(stored).overlay_layers;
+      renderOverlayLayerControlsFromState(storedOverlayLayers);
+      currentLayerOrderMode = loadLayerOrderMode(stored.layer_order_mode);
+      currentLayerOrder = normalizeLayerOrder(stored.layer_order);
+      syncOverlayLayerOrdersFromLayerOrder();
+      applyOverlayLayerOrderToUi();
+      updateOverlayLayersInput();
+      currentLayerLocks = normalizeLayerLocks(stored.layer_locks);
+      updateLayerOrderInput();
+      updateLayerLockControls();
+      applyLayerOrderToSettingsBlocks();
+      applyLayerOrderToPreviewDom();
+      initializeLayerRenameControls();
+      applyLayerNames(currentLayerNames);
       const resolvedBubbleOverlaySourceType = 'asset';
-      const resolvedBubbleOverlayAsset = storedBubbleOverlay.asset && bubbleOverlayAssets[storedBubbleOverlay.asset]
-        ? storedBubbleOverlay.asset
-        : getDefaultBubbleOverlayAssetId();
-      const bubbleOverlayAsset = getBubbleOverlayAsset(resolvedBubbleOverlayAsset);
-      if (bubbleOverlayEnabledInput) {
-        bubbleOverlayEnabledInput.checked = storedBubbleOverlay.enabled === true;
-        updateVisibilityIcon(bubbleOverlayEnabledInput);
-      }
       if (bubbleOverlaySourceTypeInput) {
         bubbleOverlaySourceTypeInput.value = resolvedBubbleOverlaySourceType;
       }
-      if (bubbleOverlayAssetInput && resolvedBubbleOverlayAsset) {
-        bubbleOverlayAssetInput.value = resolvedBubbleOverlayAsset;
-      }
-      if (bubbleOverlayXInput) {
-        bubbleOverlayXInput.value = String(storedBubbleOverlay.x ?? 180);
-      }
-      if (bubbleOverlayYInput) {
-        bubbleOverlayYInput.value = String(storedBubbleOverlay.y ?? 220);
-      }
-      if (bubbleOverlayWidthInput) {
-        bubbleOverlayWidthInput.value = String(storedBubbleOverlay.width ?? bubbleOverlayAsset?.default_width ?? 420);
-      }
-      if (bubbleOverlayHeightInput) {
-        bubbleOverlayHeightInput.value = String(storedBubbleOverlay.height ?? bubbleOverlayAsset?.default_height ?? 180);
-      }
       lastBubbleOverlayAssetValue = bubbleOverlayAssetInput?.value || '';
       updateOverlaySourcePanels();
+      setActiveOverlayLayer(activeOverlayLayerId);
       if (initialPortraitFilename) {
         commitInitialPortraitSelection();
       }
@@ -1542,15 +2466,15 @@
     function registerSectionToggle(toggle) {
       if (!toggle || toggle.dataset.sectionToggleBound === '1') return;
       toggle.dataset.sectionToggleBound = '1';
-        toggle.addEventListener('click', () => {
-          const sectionKey = toggle.dataset.settingsToggle;
-          if (!sectionKey) return;
-          const nextState = loadSceneUiState();
-          const currentOpen = nextState[sectionKey] ?? defaultSectionOpenState[sectionKey] ?? true;
-          nextState[sectionKey] = !currentOpen;
-          saveSceneUiState(nextState);
-          applySectionOpenState(sectionKey, !currentOpen);
-        });
+      toggle.addEventListener('click', () => {
+        const sectionKey = toggle.dataset.settingsToggle;
+        if (!sectionKey) return;
+        const nextState = loadSceneUiState();
+        const currentOpen = nextState[sectionKey] ?? defaultSectionOpenState[sectionKey] ?? true;
+        nextState[sectionKey] = !currentOpen;
+        saveSceneUiState(nextState);
+        applySectionOpenState(sectionKey, !currentOpen);
+      });
     }
 
     function initializeSectionToggles() {
@@ -2300,21 +3224,24 @@
     }
 
     function getLocalBubbleOverlayLayout() {
-      if (!bubbleOverlayEnabledInput?.checked) return null;
-      const sourceType = bubbleOverlaySourceTypeInput?.value || 'asset';
-      const serverLayout = latestPreviewLayout?.bubble_overlay || null;
-      const assetId = bubbleOverlayAssetInput?.value || serverLayout?.asset || '';
-      const bubbleAsset = sourceType === 'asset' ? getBubbleOverlayAsset(assetId) : null;
-      if (!bubbleAsset && sourceType !== 'file') return null;
+      return getLocalOverlayLayerLayout(overlayLayerControls[0]);
+    }
+
+    function getLocalOverlayLayerLayout(layer) {
+      if (!layer?.enabledInput?.checked) return null;
+      const assetId = layer.assetInput?.value || '';
+      const bubbleAsset = getBubbleOverlayAsset(assetId);
+      if (!bubbleAsset) return null;
       return {
-        source_type: sourceType,
+        source_type: 'asset',
         asset: assetId,
-        upload_file: serverLayout?.upload_file || '',
-        image_url: serverLayout?.image_url || '',
-        x: Math.round(Number(bubbleOverlayXInput?.value || 0) * previewScaleFactor),
-        y: Math.round(Number(bubbleOverlayYInput?.value || 0) * previewScaleFactor),
-        width: Math.max(1, Math.round(Number(bubbleOverlayWidthInput?.value || 1) * previewScaleFactor)),
-        height: Math.max(1, Math.round(Number(bubbleOverlayHeightInput?.value || 1) * previewScaleFactor)),
+        upload_file: '',
+        image_url: '',
+        x: Math.round(Number(layer.xInput?.value || 0) * previewScaleFactor),
+        y: Math.round(Number(layer.yInput?.value || 0) * previewScaleFactor),
+        width: Math.max(1, Math.round(Number(layer.widthInput?.value || 1) * previewScaleFactor)),
+        height: Math.max(1, Math.round(Number(layer.heightInput?.value || 1) * previewScaleFactor)),
+        order: layer.order,
       };
     }
 
@@ -2331,6 +3258,67 @@
       return url
         ? { key: `asset:${assetKey}:${url}`, url }
         : { key: '', url: '' };
+    }
+
+    function hideOverlayPreviewLayer(layer) {
+      if (!layer?.layer) return;
+      layer.layer.removeAttribute('src');
+      layer.sourceKey = '';
+      currentOverlayPreviewSourceKeys[layer.id] = '';
+      layer.layer.classList.add('is-hidden');
+      layer.layer.classList.remove('preview-overlay-layer--interactive');
+      layer.layer.classList.remove('is-dragging');
+    }
+
+    function getOverlayLayerZIndex(layer) {
+      const order = resolveLayerDrawOrder();
+      const overlayIndex = order.indexOf(getOverlayLayerKey(layer.id));
+      return ((Math.max(0, overlayIndex) + 1) * 10);
+    }
+
+    function renderOverlayPreviewSlots() {
+      let activeLayout = null;
+      const activeLayer = getOverlayLayerControl(activeOverlayLayerId);
+      getOrderedOverlayLayerControls().forEach((layer) => {
+        const layout = getLocalOverlayLayerLayout(layer);
+        const bubbleAsset = layout ? getBubbleOverlayAsset(layout.asset) : null;
+        if (!layout || !bubbleAsset || !layer.layer) {
+          hideOverlayPreviewLayer(layer);
+          return;
+        }
+
+        setLayerRect(layer.layer, layout.x, layout.y, layout.width, layout.height);
+        layer.layer.style.zIndex = String(getOverlayLayerZIndex(layer));
+        const overlaySource = resolveBubbleOverlayPreviewSource(layout, bubbleAsset);
+        if (overlaySource.url && overlaySource.key !== currentOverlayPreviewSourceKeys[layer.id]) {
+          layer.layer.src = overlaySource.url;
+          currentOverlayPreviewSourceKeys[layer.id] = overlaySource.key;
+          layer.sourceKey = overlaySource.key;
+        }
+        layer.layer.classList.remove('is-hidden');
+        const isActive = layer.id === activeOverlayLayerId;
+        layer.layer.classList.toggle('preview-overlay-layer--interactive', isActive);
+        layer.layer.classList.toggle('is-selected-layer', isActive && activeLayerId === getOverlayLayerKey(layer.id));
+        if (isActive) {
+          activeLayout = layout;
+        }
+      });
+
+      if (activeLayout && activeLayer?.layer && !activeLayer.layer.classList.contains('is-hidden')) {
+        bubbleOverlayResizeHandleRight?.classList.add('is-visible');
+        bubbleOverlayResizeHandleBottom?.classList.add('is-visible');
+        const activeZIndex = Number(activeLayer.layer.style.zIndex || 0);
+        if (bubbleOverlayResizeHandleRight) bubbleOverlayResizeHandleRight.style.zIndex = String(activeZIndex + 1);
+        if (bubbleOverlayResizeHandleBottom) bubbleOverlayResizeHandleBottom.style.zIndex = String(activeZIndex + 1);
+        if (bubbleDebugRect) bubbleDebugRect.style.zIndex = String(activeZIndex + 1);
+        setOverlayResizeHandlePosition(activeLayout.x, activeLayout.y, activeLayout.width, activeLayout.height);
+        const bubbleDebugVisible = textSettingSlots.some((slot) => Boolean(slot.debugInput?.checked));
+        setDebugRect(bubbleDebugRect, activeLayout, bubbleDebugVisible);
+      } else {
+        bubbleOverlayResizeHandleRight?.classList.remove('is-visible');
+        bubbleOverlayResizeHandleBottom?.classList.remove('is-visible');
+        setDebugRect(bubbleDebugRect, null, false);
+      }
     }
 
     function renderBasePreviewLayerPosition() {
@@ -2391,55 +3379,7 @@
         setLayerRect(slot.layer, left, top, width, height);
       });
 
-      const bubbleDebugVisible = textSettingSlots.some((slot) => Boolean(slot.debugInput?.checked));
-      const bubbleOverlayLayout = getLocalBubbleOverlayLayout();
-      if (bubbleOverlayLayout && bubbleOverlayLayer) {
-        const bubbleAsset = bubbleOverlayLayout.source_type === 'asset'
-          ? getBubbleOverlayAsset(bubbleOverlayLayout.asset)
-          : null;
-        if (bubbleAsset || bubbleOverlayLayout.source_type === 'file') {
-          const overlayLeft = bubbleOverlayLayout.x;
-          const overlayTop = bubbleOverlayLayout.y;
-          const overlayWidth = bubbleOverlayLayout.width;
-          const overlayHeight = bubbleOverlayLayout.height;
-          setLayerRect(
-            bubbleOverlayLayer,
-            overlayLeft,
-            overlayTop,
-            overlayWidth,
-            overlayHeight,
-          );
-          const overlaySource = resolveBubbleOverlayPreviewSource(bubbleOverlayLayout, bubbleAsset);
-          if (overlaySource.url && overlaySource.key !== currentBubbleOverlayPreviewSourceKey) {
-            bubbleOverlayLayer.src = overlaySource.url;
-            currentBubbleOverlayPreviewSourceKey = overlaySource.key;
-          }
-          bubbleOverlayLayer.classList.remove('is-hidden');
-          bubbleOverlayLayer.classList.add('preview-overlay-layer--interactive');
-          bubbleOverlayResizeHandleRight?.classList.add('is-visible');
-          bubbleOverlayResizeHandleBottom?.classList.add('is-visible');
-          setOverlayResizeHandlePosition(overlayLeft, overlayTop, overlayWidth, overlayHeight);
-          setDebugRect(bubbleDebugRect, bubbleOverlayLayout, bubbleDebugVisible);
-        } else {
-          bubbleOverlayLayer.removeAttribute('src');
-          currentBubbleOverlayPreviewSourceKey = '';
-          bubbleOverlayLayer.classList.add('is-hidden');
-          bubbleOverlayLayer.classList.remove('preview-overlay-layer--interactive');
-          bubbleOverlayResizeHandleRight?.classList.remove('is-visible');
-          bubbleOverlayResizeHandleBottom?.classList.remove('is-visible');
-          setDebugRect(bubbleDebugRect, null, false);
-        }
-      } else {
-        if (bubbleOverlayLayer) {
-          bubbleOverlayLayer.removeAttribute('src');
-          currentBubbleOverlayPreviewSourceKey = '';
-          bubbleOverlayLayer.classList.add('is-hidden');
-          bubbleOverlayLayer.classList.remove('preview-overlay-layer--interactive');
-        }
-        bubbleOverlayResizeHandleRight?.classList.remove('is-visible');
-        bubbleOverlayResizeHandleBottom?.classList.remove('is-visible');
-        setDebugRect(bubbleDebugRect, null, false);
-      }
+      renderOverlayPreviewSlots();
 
       textSettingSlots.forEach((slot) => {
         renderTextPreviewLayer(slot);
@@ -2573,24 +3513,27 @@
     }
 
     function applyOverlayResize(width, height) {
+      const activeLayer = getOverlayLayerControl(activeOverlayLayerId);
+      if (!activeLayer?.widthInput || !activeLayer.heightInput || !activeLayer.layer) return;
       const nextWidth = Math.max(40, width);
       const nextHeight = Math.max(40, height);
-      bubbleOverlayWidthInput.value = String(nextWidth);
-      bubbleOverlayHeightInput.value = String(nextHeight);
+      activeLayer.widthInput.value = String(nextWidth);
+      activeLayer.heightInput.value = String(nextHeight);
       overlayDragTarget.syncPreviewLayoutSize?.(nextWidth, nextHeight);
-      const previewLeft = Math.round(Number(bubbleOverlayXInput.value || 0) * previewScaleFactor);
-      const previewTop = Math.round(Number(bubbleOverlayYInput.value || 0) * previewScaleFactor);
+      const previewLeft = Math.round(Number(activeLayer.xInput?.value || 0) * previewScaleFactor);
+      const previewTop = Math.round(Number(activeLayer.yInput?.value || 0) * previewScaleFactor);
       const previewWidth = Math.round(nextWidth * previewScaleFactor);
       const previewHeight = Math.round(nextHeight * previewScaleFactor);
-      setLayerRect(bubbleOverlayLayer, previewLeft, previewTop, previewWidth, previewHeight);
+      setLayerRect(activeLayer.layer, previewLeft, previewTop, previewWidth, previewHeight);
       setOverlayResizeHandlePosition(previewLeft, previewTop, previewWidth, previewHeight);
     }
 
     function beginOverlayResize(axis, event) {
-      if (!bubbleOverlayLayer || !bubbleOverlayWidthInput || !bubbleOverlayHeightInput) return;
+      const activeLayer = getOverlayLayerControl(activeOverlayLayerId);
+      if (!activeLayer?.layer || !activeLayer.widthInput || !activeLayer.heightInput) return;
       if (event.button !== undefined && event.button !== 0) return;
-      if (blockLockedPointer('overlay_image', event)) return;
-      if (bubbleOverlayLayer.classList.contains('is-hidden')) return;
+      if (blockLockedPointer(getOverlayLayerKey(activeLayer.id), event)) return;
+      if (activeLayer.layer.classList.contains('is-hidden')) return;
 
       const scale = getPreviewScale();
       overlayResizeState = {
@@ -2598,8 +3541,8 @@
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startWidth: Number(bubbleOverlayWidthInput.value || 0),
-        startHeight: Number(bubbleOverlayHeightInput.value || 0),
+        startWidth: Number(activeLayer.widthInput.value || 0),
+        startHeight: Number(activeLayer.heightInput.value || 0),
         scaleX: scale.x,
         scaleY: scale.y,
       };
@@ -2707,6 +3650,7 @@
         const collapseToggle = actions.querySelector('.settings-block-toggle');
         actions.insertBefore(backButton, collapseToggle || actions.firstChild);
         actions.insertBefore(frontButton, collapseToggle || actions.firstChild);
+        orderHeaderActions(actions);
       });
 
       if (sceneForm.dataset.layerMoveEventsBound === '1') return;
@@ -2744,7 +3688,6 @@
         character2: 'キャラ2',
         character3: 'キャラ3',
         message_band: 'メッセージ帯',
-        overlay_image: '画像オーバーレイ',
       };
       sceneForm?.querySelectorAll('.settings-block[data-layer-id]').forEach((block) => {
         const textMatch = String(block.dataset.layerId || '').match(/^text(\d+)$/);
@@ -2792,6 +3735,7 @@
 
         const collapseToggle = actions.querySelector('.settings-block-toggle');
         actions.insertBefore(label, collapseToggle || actions.firstChild);
+        orderHeaderActions(actions);
       });
       updateLayerLockControls();
     }
@@ -2811,6 +3755,7 @@
       try {
         showSceneStatus('プレビュー更新中...', 'loading');
         updateLayerOrderInput();
+        updateOverlayLayersInput();
         const formData = new FormData(sceneForm);
         appendCharacterState(formData);
         await appendSceneBaseImage(formData);
@@ -2896,11 +3841,10 @@
         latestPreviewLayout.message_band.color = messageBandColorInput?.value || '#000000';
         latestPreviewLayout.message_band.opacity = Number(messageBandOpacityInput?.value || 0);
       }
-      if (latestPreviewLayout?.bubble_overlay) {
-        latestPreviewLayout.bubble_overlay.x = Math.round(Number(bubbleOverlayXInput?.value || 0) * previewScaleFactor);
-        latestPreviewLayout.bubble_overlay.y = Math.round(Number(bubbleOverlayYInput?.value || 0) * previewScaleFactor);
-        latestPreviewLayout.bubble_overlay.width = Math.max(1, Math.round(Number(bubbleOverlayWidthInput?.value || 1) * previewScaleFactor));
-        latestPreviewLayout.bubble_overlay.height = Math.max(1, Math.round(Number(bubbleOverlayHeightInput?.value || 1) * previewScaleFactor));
+      if (Array.isArray(latestPreviewLayout?.overlay_layers)) {
+        latestPreviewLayout.overlay_layers = getOrderedOverlayLayerControls()
+          .map(getLocalOverlayLayerLayout)
+          .filter(Boolean);
       }
       textSettingSlots.forEach((slot) => {
         syncTextPreviewLayoutPosition(slot.key, slot.xInput, slot.yInput);
@@ -2943,6 +3887,7 @@
     sceneForm?.addEventListener('submit', async (event) => {
       event.preventDefault();
       updateLayerOrderInput();
+      updateOverlayLayersInput();
       const formData = new FormData(sceneForm);
       appendCharacterState(formData);
       await appendSceneBaseImage(formData);
@@ -2974,10 +3919,6 @@
       baseXInput,
       baseYInput,
       canvasPresetSelect,
-      bubbleOverlayXInput,
-      bubbleOverlayYInput,
-      bubbleOverlayWidthInput,
-      bubbleOverlayHeightInput,
       messageBandXInput,
       messageBandYInput,
       messageBandWidthInput,
@@ -3000,21 +3941,70 @@
 
     characterSlots.forEach(registerCharacterSlotEvents);
     textSettingSlots.forEach(registerTextSlotEvents);
-    bubbleOverlayEnabledInput?.addEventListener('change', () => {
-      updateVisibilityIcon(bubbleOverlayEnabledInput);
-      renderScenePreviewLayers();
-      saveSceneState();
-      if (bubbleOverlayEnabledInput.checked && !latestPreviewLayout?.bubble_overlay) {
-        scheduleScenePreview();
-      }
-    });
-    bubbleOverlayAssetInput?.addEventListener('change', () => {
-      applySelectedOverlayAssetDefaults(lastBubbleOverlayAssetValue);
-      lastBubbleOverlayAssetValue = bubbleOverlayAssetInput.value;
-      renderScenePreviewLayers();
-      saveSceneState();
-      scheduleScenePreview();
-    });
+    function registerOverlayLayerEvents(layer) {
+      if (!layer || layer.eventsRegistered) return;
+      layer.eventsRegistered = true;
+      layer.selectButton?.addEventListener('click', () => {
+        setActiveOverlayLayer(layer.id);
+        setActiveLayer(getOverlayLayerKey(layer.id));
+        saveSceneState();
+      });
+      layer.moveUpButton?.addEventListener('click', () => moveOverlayLayer(layer.id, 'up'));
+      layer.moveDownButton?.addEventListener('click', () => moveOverlayLayer(layer.id, 'down'));
+      layer.deleteButton?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteOverlayLayer(layer.id);
+      });
+      layer.deleteButton?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        deleteOverlayLayer(layer.id);
+      });
+      layer.card?.addEventListener('pointerdown', (event) => {
+        if (event.target.closest('input, select, button, label')) return;
+        setActiveOverlayLayer(layer.id);
+      });
+      layer.enabledInput?.addEventListener('change', () => {
+        setActiveOverlayLayer(layer.id);
+        updateVisibilityIcon(layer.enabledInput);
+        renderScenePreviewLayers();
+        saveSceneState();
+      });
+      let previousAssetId = layer.assetInput?.value || '';
+      layer.assetInput?.addEventListener('change', () => {
+        setActiveOverlayLayer(layer.id);
+        applySelectedOverlayAssetDefaults(previousAssetId, layer);
+        previousAssetId = layer.assetInput.value;
+        if (layer.id === 'overlay_1') {
+          lastBubbleOverlayAssetValue = layer.assetInput.value;
+        }
+        renderScenePreviewLayers();
+        saveSceneState();
+      });
+      [layer.xInput, layer.yInput, layer.widthInput, layer.heightInput].forEach((element) => {
+        element?.addEventListener('change', () => {
+          setActiveOverlayLayer(layer.id);
+          requestCommittedPreviewUpdate({ server: false });
+        });
+        element?.addEventListener('input', () => {
+          setActiveOverlayLayer(layer.id);
+          applyImmediatePreviewUpdate();
+        });
+      });
+      layer.layer?.addEventListener('load', renderScenePreviewLayers);
+      layer.layer?.addEventListener('pointerdown', (event) => {
+        if (layer.id !== activeOverlayLayerId) return;
+        syncOverlayDragTarget();
+        beginPreviewObjectDrag(overlayDragTarget, event);
+      });
+      layer.layer?.addEventListener('pointermove', updatePreviewObjectDrag);
+      layer.layer?.addEventListener('pointerup', endPreviewObjectDrag);
+      layer.layer?.addEventListener('pointercancel', endPreviewObjectDrag);
+    }
+    overlayLayerControls.forEach(registerOverlayLayerEvents);
+    addOverlayLayerButton?.addEventListener('click', addOverlayLayer);
     [messageBandEnabledInput].forEach((element) => {
       element?.addEventListener('change', () => {
         if (element === messageBandEnabledInput) {
@@ -3193,8 +4183,12 @@
       initializeLayerOrderDrag();
       initializeLayerMoveControls();
       initializeLayerLockControls();
+      initializeLayerDeleteControls();
+      initializeLayerRenameControls();
       updateLayerLockControls();
+      applyLayerOrderToSettingsBlocks();
       applyLayerOrderToPreviewDom();
+      applyLayerNames(currentLayerNames);
       if (save) {
         saveSceneState();
       }
@@ -3222,6 +4216,8 @@
       currentLayerOrder = currentLayerOrder.filter((id) => id !== layerId);
       delete currentLayerLocks[layerId];
       delete defaultSectionOpenState[layerId];
+      delete currentLayerNames[layerId];
+      layerRenameStates.delete(layerId);
       if (activeLayerId === layerId) {
         activeLayerId = characterSlots[characterSlots.length - 1]?.layerId || '';
       }
@@ -3258,9 +4254,12 @@
       initializeLayerOrderDrag();
       initializeLayerMoveControls();
       initializeLayerLockControls();
+      initializeLayerDeleteControls();
+      initializeLayerRenameControls();
       updateLayerLockControls();
       applyLayerOrderToSettingsBlocks();
       applyLayerOrderToPreviewDom();
+      applyLayerNames(currentLayerNames);
       if (save) {
         saveSceneState();
       }
@@ -3285,6 +4284,8 @@
       currentLayerOrder = currentLayerOrder.filter((id) => id !== layerId);
       delete currentLayerLocks[layerId];
       delete defaultSectionOpenState[layerId];
+      delete currentLayerNames[layerId];
+      layerRenameStates.delete(layerId);
       if (latestPreviewLayout) {
         delete latestPreviewLayout[slot.key];
       }
@@ -3378,30 +4379,40 @@
         },
       };
     }
-    const overlayDragTarget = {
+    overlayDragTarget = {
       slot: 'overlay',
-      layerId: 'overlay_image',
+      layerId: getOverlayLayerKey(activeOverlayLayerId),
       xInput: bubbleOverlayXInput,
       yInput: bubbleOverlayYInput,
       layer: bubbleOverlayLayer,
+      layerControl: getOverlayLayerControl(activeOverlayLayerId),
       onCommit() {},
       syncPreviewLayoutPosition(x, y) {
-        const bubbleOverlayLayout = latestPreviewLayout?.bubble_overlay;
-        if (!bubbleOverlayLayout) return;
-        bubbleOverlayLayout.x = Math.round(x * previewScaleFactor);
-        bubbleOverlayLayout.y = Math.round(y * previewScaleFactor);
+        const layer = this.layerControl || getOverlayLayerControl(activeOverlayLayerId);
+        const layout = getLocalOverlayLayerLayout(layer);
+        if (!layout) return;
+        layout.x = Math.round(x * previewScaleFactor);
+        layout.y = Math.round(y * previewScaleFactor);
       },
       syncPreviewLayoutSize(width, height) {
-        const bubbleOverlayLayout = latestPreviewLayout?.bubble_overlay;
-        if (!bubbleOverlayLayout) return;
-        bubbleOverlayLayout.width = Math.round(width * previewScaleFactor);
-        bubbleOverlayLayout.height = Math.round(height * previewScaleFactor);
+        const layer = this.layerControl || getOverlayLayerControl(activeOverlayLayerId);
+        const layout = getLocalOverlayLayerLayout(layer);
+        if (!layout) return;
+        layout.width = Math.round(width * previewScaleFactor);
+        layout.height = Math.round(height * previewScaleFactor);
       },
     };
-    bubbleOverlayLayer?.addEventListener('pointerdown', (event) => beginPreviewObjectDrag(overlayDragTarget, event));
-    bubbleOverlayLayer?.addEventListener('pointermove', updatePreviewObjectDrag);
-    bubbleOverlayLayer?.addEventListener('pointerup', endPreviewObjectDrag);
-    bubbleOverlayLayer?.addEventListener('pointercancel', endPreviewObjectDrag);
+    syncOverlayDragTarget();
+    overlayLayerControls.forEach((layer) => {
+      layer.layer?.addEventListener('pointerdown', (event) => {
+        if (layer.id !== activeOverlayLayerId) return;
+        syncOverlayDragTarget();
+        beginPreviewObjectDrag(overlayDragTarget, event);
+      });
+      layer.layer?.addEventListener('pointermove', updatePreviewObjectDrag);
+      layer.layer?.addEventListener('pointerup', endPreviewObjectDrag);
+      layer.layer?.addEventListener('pointercancel', endPreviewObjectDrag);
+    });
     bubbleOverlayResizeHandleRight?.addEventListener('pointerdown', (event) => beginOverlayResize('x', event));
     bubbleOverlayResizeHandleRight?.addEventListener('pointermove', updateOverlayResize);
     bubbleOverlayResizeHandleRight?.addEventListener('pointerup', endOverlayResize);
@@ -3420,13 +4431,16 @@
       initializeLayerOrderDrag();
       initializeLayerMoveControls();
       initializeLayerHeaderLabels();
+      initializeLayerRenameControls();
       initializeLayerLockControls();
+      initializeLayerDeleteControls();
       updateVisibilityIcons();
       updateLayerOrderInput();
       applyLayerOrderToPreviewDom();
       initializeSectionToggles();
       await loadFontOptions();
       applyStoredSceneState();
+      commitInitialOverlaySelection();
       for (const slot of textSettingSlots) {
         if (slot.fontInput?.value) {
           try {

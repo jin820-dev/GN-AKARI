@@ -75,6 +75,21 @@
             aria-label="写真合成で使う"
             onclick="useBackground(this.dataset.filename)"
           >→</button>
+          {% elif kind == "overlay" %}
+          <div class="gallery-use-menu">
+            <button
+              type="button"
+              class="gallery-action-button gallery-action-button--use gallery-action-button--overlay-use"
+              data-overlay-asset="{{ item.id }}"
+              title="適用先を選択"
+              aria-label="適用先を選択"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              onclick="toggleOverlaySlotMenu(this)"
+            >→</button>
+            <div class="portrait-slot-menu" data-overlay-slot-menu hidden>
+            </div>
+          </div>
           {% else %}
           <div class="gallery-use-menu">
             <button
@@ -132,7 +147,7 @@
   {{ render_gallery_section("scene", "works", "Scene Gallery", scene_gallery_items, show_delete=True) }}
   <div id="works-gallery-empty" class="empty gallery-category-empty" data-gallery-category="works" {% if portrait_gallery_items or scene_gallery_items %}style="display:none"{% endif %}>まだ作品がありません。立ち絵合成または写真合成で作成してください。</div>
   {{ render_gallery_section("background", "background", "Background Gallery", background_gallery_items, "まだ背景がありません。背景画像を追加して登録できます。", show_use=True, show_delete=True, show_upload=True) }}
-  {{ render_gallery_section("overlay", "overlay", "Overlay Gallery", overlay_gallery_items, "まだオーバーレイがありません。右上の追加ボタンから登録できます。", show_delete=True, show_upload=True) }}
+  {{ render_gallery_section("overlay", "overlay", "Overlay Gallery", overlay_gallery_items, "まだオーバーレイがありません。右上の追加ボタンから登録できます。", show_use=True, show_delete=True, show_upload=True) }}
 
   <div id="gallery-preview-modal" class="gallery-preview-modal is-hidden" role="dialog" aria-modal="true" aria-label="画像プレビュー">
     <button type="button" id="gallery-preview-close" class="gallery-preview-close" aria-label="閉じる">×</button>

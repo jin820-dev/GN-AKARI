@@ -79,10 +79,29 @@ SCENE_CANVAS_PRESETS = {
     "9:16": (1080, 1920),
 }
 SCENE_PREVIEW_SCALE = 0.5
-DEFAULT_SCENE_LAYER_ORDER = ["base_image", "message_band", "character1", "character2", "character3", "overlay_image", "text2", "text1"]
+DEFAULT_SCENE_LAYER_ORDER = ["base_image", "message_band", "character1", "character2", "character3", "text2", "text1"]
 DEFAULT_SCENE_LAYER_ORDER_MODE = "aviutl"
+OVERLAY_LAYER_ANCHORS = {
+    "before_message_band",
+    "after_message_band",
+    "before_characters",
+    "after_characters",
+    "before_text",
+    "after_text",
+}
+DEFAULT_OVERLAY_SLOTS = [
+    {"slot_id": "slot_1", "label": "前景", "asset_id": None, "visible": True, "x": 0, "y": 0, "width": 320, "height": 180, "layer_anchor": "after_characters"},
+    {"slot_id": "slot_2", "label": "演出", "asset_id": None, "visible": True, "x": 0, "y": 0, "width": 320, "height": 180, "layer_anchor": "after_characters"},
+    {"slot_id": "slot_3", "label": "フレーム", "asset_id": None, "visible": True, "x": 0, "y": 0, "width": 320, "height": 180, "layer_anchor": "before_text"},
+]
+DEFAULT_OVERLAY_LAYERS = [
+    {"id": "overlay_1", "name": "Overlay 1", "asset_id": None, "visible": True, "x": 0, "y": 0, "width": 320, "height": 180, "order": 0},
+    {"id": "overlay_2", "name": "Overlay 2", "asset_id": None, "visible": True, "x": 0, "y": 0, "width": 320, "height": 180, "order": 1},
+    {"id": "overlay_3", "name": "Overlay 3", "asset_id": None, "visible": True, "x": 0, "y": 0, "width": 320, "height": 180, "order": 2},
+]
 SCENE_CHARACTER_LAYER_RE = re.compile(r"^character(\d+)$")
 SCENE_TEXT_LAYER_RE = re.compile(r"^text(\d+)$")
+SCENE_OVERLAY_LAYER_RE = re.compile(r"^overlay:(.+)$")
 
 app = Flask(__name__, template_folder=str(ROOT_DIR / "templates"))
 app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
@@ -745,6 +764,7 @@ def list_overlay_gallery_items() -> list[dict]:
         stat = file_path.stat()
         items.append(
             {
+                "id": asset["id"],
                 "filename": asset["filename"],
                 "url": asset["file_url"],
                 "mtime": datetime.fromtimestamp(stat.st_mtime),
@@ -1616,7 +1636,270 @@ def load_scene_text_inputs() -> list[dict]:
     return texts
 
 
-def load_scene_bubble_overlay_input() -> dict:
+def parse_overlay_slot_bool(value, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "on"}:
+        return True
+    if normalized in {"0", "false", "off"}:
+        return False
+    return default
+
+
+def parse_overlay_slot_int(value, default: int, minimum: int | None = None) -> int:
+    try:
+        parsed = round(float(value))
+    except (TypeError, ValueError):
+        parsed = default
+    if minimum is not None:
+        return max(minimum, parsed)
+    return parsed
+
+
+def normalize_overlay_layer_anchor(value, default: str) -> str:
+    normalized = str(value or "").strip()
+    return normalized if normalized in OVERLAY_LAYER_ANCHORS else default
+
+
+def normalize_overlay_slot(raw_slot: dict | None, default_slot: dict, available_asset_ids: set[str]) -> dict:
+    source = raw_slot if isinstance(raw_slot, dict) else {}
+    raw_asset_id = str(source.get("asset_id") or source.get("asset") or "").strip()
+    asset_id = raw_asset_id if raw_asset_id in available_asset_ids else None
+    visible = (
+        False
+        if raw_asset_id and asset_id is None
+        else parse_overlay_slot_bool(source.get("visible", source.get("enabled")), bool(default_slot["visible"]))
+    )
+
+    return {
+        "slot_id": default_slot["slot_id"],
+        "label": str(source.get("label") or default_slot["label"]),
+        "asset_id": asset_id,
+        "visible": visible,
+        "x": parse_overlay_slot_int(source.get("x"), int(default_slot["x"])),
+        "y": parse_overlay_slot_int(source.get("y"), int(default_slot["y"])),
+        "width": parse_overlay_slot_int(source.get("width"), int(default_slot["width"]), minimum=1),
+        "height": parse_overlay_slot_int(source.get("height"), int(default_slot["height"]), minimum=1),
+        "layer_anchor": normalize_overlay_layer_anchor(source.get("layer_anchor"), str(default_slot["layer_anchor"])),
+    }
+
+
+def normalize_scene_overlay_slots_state(scene_state: dict | None) -> list[dict]:
+    source = scene_state if isinstance(scene_state, dict) else {}
+    raw_slots = source.get("overlay_slots") if isinstance(source.get("overlay_slots"), list) else None
+    if raw_slots is None and isinstance(source.get("bubble_overlay"), dict):
+        bubble_overlay = source["bubble_overlay"]
+        raw_slots = [
+            {
+                "slot_id": "slot_1",
+                "label": "前景",
+                "asset_id": bubble_overlay.get("asset_id") or bubble_overlay.get("asset"),
+                "visible": bubble_overlay.get("visible", bubble_overlay.get("enabled")),
+                "x": bubble_overlay.get("x"),
+                "y": bubble_overlay.get("y"),
+                "width": bubble_overlay.get("width"),
+                "height": bubble_overlay.get("height"),
+                "layer_anchor": bubble_overlay.get("layer_anchor"),
+            }
+        ]
+
+    available_asset_ids = set(build_registered_overlay_assets().keys())
+    return [
+        normalize_overlay_slot(
+            raw_slots[index] if raw_slots is not None and index < len(raw_slots) else None,
+            default_slot,
+            available_asset_ids,
+        )
+        for index, default_slot in enumerate(DEFAULT_OVERLAY_SLOTS)
+    ]
+
+
+def overlay_anchor_to_initial_order(anchor, fallback_order: int) -> int:
+    anchor_order = {
+        "before_message_band": 0,
+        "after_message_band": 1,
+        "before_characters": 2,
+        "after_characters": 3,
+        "before_text": 4,
+        "after_text": 5,
+    }
+    return anchor_order.get(anchor, fallback_order)
+
+
+def create_overlay_layer_id() -> str:
+    return f"overlay_{secrets.token_hex(8)}"
+
+
+def build_overlay_layer_key(layer_id: str) -> str:
+    return f"overlay:{layer_id}"
+
+
+def normalize_overlay_layer(raw_layer: dict | None, default_layer: dict, available_asset_ids: set[str], index: int) -> dict:
+    source = raw_layer if isinstance(raw_layer, dict) else {}
+    raw_asset_id = str(source.get("asset_id") or source.get("asset") or "").strip()
+    asset_id = raw_asset_id if raw_asset_id in available_asset_ids else None
+    visible = (
+        False
+        if raw_asset_id and asset_id is None
+        else parse_overlay_slot_bool(source.get("visible", source.get("enabled")), bool(default_layer["visible"]))
+    )
+    return {
+        "id": str(source.get("id") or source.get("slot_id") or default_layer.get("id") or create_overlay_layer_id()),
+        "name": str(source.get("name") or source.get("label") or default_layer.get("name") or f"Overlay {index + 1}"),
+        "asset_id": asset_id,
+        "visible": visible,
+        "x": parse_overlay_slot_int(source.get("x"), int(default_layer["x"])),
+        "y": parse_overlay_slot_int(source.get("y"), int(default_layer["y"])),
+        "width": parse_overlay_slot_int(source.get("width"), int(default_layer["width"]), minimum=1),
+        "height": parse_overlay_slot_int(source.get("height"), int(default_layer["height"]), minimum=1),
+        "order": parse_overlay_slot_int(
+            source.get("order"),
+            overlay_anchor_to_initial_order(source.get("layer_anchor"), index),
+            minimum=0,
+        ),
+    }
+
+
+def normalize_overlay_layer_orders(layers: list[dict]) -> list[dict]:
+    ordered_layers = sorted(enumerate(layers), key=lambda item: (item[1]["order"], item[0]))
+    normalized = []
+    seen_ids = set()
+    for order, (_, layer) in enumerate(ordered_layers):
+        layer_id = str(layer.get("id") or "").strip() or create_overlay_layer_id()
+        while layer_id in seen_ids:
+            layer_id = create_overlay_layer_id()
+        seen_ids.add(layer_id)
+        normalized.append({**layer, "id": layer_id, "order": order})
+    return normalized
+
+
+def build_overlay_layers_from_legacy_slots(raw_slots: list[dict]) -> list[dict]:
+    layers = []
+    for index, slot in enumerate(raw_slots):
+        layers.append(
+            {
+                "id": f"overlay_{index + 1}",
+                "name": DEFAULT_OVERLAY_LAYERS[index]["name"] if index < len(DEFAULT_OVERLAY_LAYERS) else f"Overlay {index + 1}",
+                "asset_id": slot.get("asset_id") or slot.get("asset"),
+                "visible": slot.get("visible", slot.get("enabled")),
+                "x": slot.get("x"),
+                "y": slot.get("y"),
+                "width": slot.get("width"),
+                "height": slot.get("height"),
+                "order": overlay_anchor_to_initial_order(slot.get("layer_anchor"), index),
+            }
+        )
+    return layers
+
+
+def normalize_scene_overlay_layers_state(scene_state: dict | None) -> list[dict]:
+    source = scene_state if isinstance(scene_state, dict) else {}
+    raw_layers = source.get("overlay_layers") if isinstance(source.get("overlay_layers"), list) else None
+    if raw_layers is None and isinstance(source.get("overlay_slots"), list):
+        raw_layers = build_overlay_layers_from_legacy_slots(source["overlay_slots"])
+    if raw_layers is None and isinstance(source.get("bubble_overlay"), dict):
+        bubble_overlay = source["bubble_overlay"]
+        raw_layers = [
+            {
+                "id": "overlay_1",
+                "name": "Overlay 1",
+                "asset_id": bubble_overlay.get("asset_id") or bubble_overlay.get("asset"),
+                "visible": bubble_overlay.get("visible", bubble_overlay.get("enabled")),
+                "x": bubble_overlay.get("x"),
+                "y": bubble_overlay.get("y"),
+                "width": bubble_overlay.get("width"),
+                "height": bubble_overlay.get("height"),
+                "order": overlay_anchor_to_initial_order(bubble_overlay.get("layer_anchor"), 0),
+            }
+        ]
+    if raw_layers is None:
+        raw_layers = DEFAULT_OVERLAY_LAYERS
+
+    available_asset_ids = set(build_registered_overlay_assets().keys())
+    return normalize_overlay_layer_orders(
+        [
+            normalize_overlay_layer(
+                raw_layer,
+                DEFAULT_OVERLAY_LAYERS[index] if index < len(DEFAULT_OVERLAY_LAYERS) else DEFAULT_OVERLAY_LAYERS[0],
+                available_asset_ids,
+                index,
+            )
+            for index, raw_layer in enumerate(raw_layers)
+        ]
+    )
+
+
+def load_scene_overlay_layers_form_state() -> dict | None:
+    raw_overlay_layers = (request.form.get("overlay_layers") or "").strip()
+    if raw_overlay_layers:
+        parsed = json.loads(raw_overlay_layers)
+        if isinstance(parsed, list):
+            return {"overlay_layers": parsed}
+        if isinstance(parsed, dict):
+            return parsed
+        raise ValueError("overlay_layers is invalid.")
+
+    raw_overlay_slots = (request.form.get("overlay_slots") or "").strip()
+    if raw_overlay_slots:
+        parsed = json.loads(raw_overlay_slots)
+        if isinstance(parsed, list):
+            return {"overlay_slots": parsed}
+        if isinstance(parsed, dict):
+            return parsed
+        raise ValueError("overlay_slots is invalid.")
+
+    raw_bubble_overlay = (request.form.get("bubble_overlay") or "").strip()
+    if raw_bubble_overlay:
+        parsed = json.loads(raw_bubble_overlay)
+        if not isinstance(parsed, dict):
+            raise ValueError("bubble_overlay is invalid.")
+        return {"bubble_overlay": parsed}
+
+    return None
+
+
+def build_bubble_overlay_from_overlay_layer(layer: dict) -> dict:
+    return {
+        "enabled": bool(layer["visible"] and layer["asset_id"]),
+        "source_type": "asset",
+        "asset": layer["asset_id"] or "",
+        "upload_file": "",
+        "x": layer["x"],
+        "y": layer["y"],
+        "width": layer["width"],
+        "height": layer["height"],
+    }
+
+
+def normalize_legacy_bubble_overlay_input(bubble_overlay: dict) -> dict:
+    if bubble_overlay["source_type"] != "asset":
+        return bubble_overlay
+    layers = normalize_scene_overlay_layers_state(
+        {
+            "overlay_layers": [
+                {
+                    "id": "overlay_1",
+                    "name": "Overlay 1",
+                    "asset_id": bubble_overlay["asset"],
+                    "visible": bubble_overlay["enabled"],
+                    "x": bubble_overlay["x"],
+                    "y": bubble_overlay["y"],
+                    "width": bubble_overlay["width"],
+                    "height": bubble_overlay["height"],
+                    "order": 0,
+                }
+            ]
+        }
+    )
+    return build_bubble_overlay_from_overlay_layer(layers[0])
+
+
+def load_scene_overlay_layers_input() -> list[dict]:
+    overlay_layers_state = load_scene_overlay_layers_form_state()
+    if overlay_layers_state is not None:
+        return normalize_scene_overlay_layers_state(overlay_layers_state)
+
     enabled_raw = request.form.get("bubble_overlay_enabled")
     enabled = enabled_raw in {"1", "true", "on"}
     source_type = (request.form.get("bubble_overlay_source_type") or "asset").strip() or "asset"
@@ -1649,7 +1932,7 @@ def load_scene_bubble_overlay_input() -> dict:
     if height <= 0:
         raise ValueError("bubble_overlay_height must be greater than 0.")
 
-    return {
+    bubble_overlay = {
         "enabled": enabled,
         "source_type": source_type,
         "asset": asset_id,
@@ -1659,6 +1942,39 @@ def load_scene_bubble_overlay_input() -> dict:
         "width": width,
         "height": height,
     }
+    return normalize_scene_overlay_layers_state(
+        {
+            "overlay_layers": [
+                {
+                    "id": "overlay_1",
+                    "name": "Overlay 1",
+                    "asset_id": bubble_overlay["asset"],
+                    "visible": bubble_overlay["enabled"],
+                    "x": bubble_overlay["x"],
+                    "y": bubble_overlay["y"],
+                    "width": bubble_overlay["width"],
+                    "height": bubble_overlay["height"],
+                    "order": 0,
+                }
+            ]
+        }
+    )
+
+
+def load_scene_bubble_overlay_input() -> dict:
+    layers = load_scene_overlay_layers_input()
+    if not layers:
+        return {
+            "enabled": False,
+            "source_type": "asset",
+            "asset": "",
+            "upload_file": "",
+            "x": 0,
+            "y": 0,
+            "width": 320,
+            "height": 180,
+        }
+    return build_bubble_overlay_from_overlay_layer(layers[0])
 
 
 def measure_multiline_text_layout(
@@ -1703,6 +2019,39 @@ def build_scene_bubble_overlay_layout(bubble_overlay: dict, position_scale: floa
         "width": max(1, round(bubble_overlay["width"] * position_scale)),
         "height": max(1, round(bubble_overlay["height"] * position_scale)),
     }
+
+
+def build_scene_overlay_layer_layout(
+    layer: dict,
+    position_scale: float,
+    available_asset_ids: set[str] | None = None,
+) -> dict | None:
+    asset_id = str(layer.get("asset_id") or "").strip()
+    if not layer.get("visible") or not asset_id:
+        return None
+    if available_asset_ids is not None and asset_id not in available_asset_ids:
+        return None
+    return {
+        "id": layer["id"],
+        "name": layer["name"],
+        "layer_key": build_overlay_layer_key(layer["id"]),
+        "asset": asset_id,
+        "x": round(layer["x"] * position_scale),
+        "y": round(layer["y"] * position_scale),
+        "width": max(1, round(layer["width"] * position_scale)),
+        "height": max(1, round(layer["height"] * position_scale)),
+        "order": layer["order"],
+    }
+
+
+def build_scene_overlay_layer_layouts(overlay_layers: list[dict], position_scale: float) -> list[dict]:
+    layouts = []
+    available_asset_ids = set(build_registered_overlay_assets().keys())
+    for layer in sorted(overlay_layers, key=lambda item: item["order"]):
+        layout = build_scene_overlay_layer_layout(layer, position_scale, available_asset_ids)
+        if layout is not None:
+            layouts.append(layout)
+    return layouts
 
 
 def build_scene_text_layout(
@@ -1818,26 +2167,46 @@ def normalize_scene_layer_order(raw_order, extra_layer_ids: list[str] | None = N
     else:
         parsed_order = raw_order
 
+    extra_layer_ids = [str(layer_id) for layer_id in (extra_layer_ids or [])]
+    overlay_layer_ids = [layer_id for layer_id in extra_layer_ids if SCENE_OVERLAY_LAYER_RE.match(layer_id)]
     normalized = []
+    saw_overlay_layer = False
+
+    def add_layer(layer_id: str) -> None:
+        if layer_id not in normalized:
+            normalized.append(layer_id)
+
     if isinstance(parsed_order, list):
         for layer_id in parsed_order:
             layer_id = str(layer_id)
+            if layer_id == "overlay_image":
+                saw_overlay_layer = True
+                for overlay_layer_id in overlay_layer_ids:
+                    add_layer(overlay_layer_id)
+                continue
             if (
                 layer_id in DEFAULT_SCENE_LAYER_ORDER
                 or SCENE_CHARACTER_LAYER_RE.match(layer_id)
                 or SCENE_TEXT_LAYER_RE.match(layer_id)
-            ) and layer_id not in normalized:
-                normalized.append(layer_id)
+                or layer_id in overlay_layer_ids
+            ):
+                if layer_id in overlay_layer_ids:
+                    saw_overlay_layer = True
+                add_layer(layer_id)
     for layer_id in DEFAULT_SCENE_LAYER_ORDER:
-        if layer_id not in normalized:
-            normalized.append(layer_id)
-    for layer_id in extra_layer_ids or []:
-        layer_id = str(layer_id)
+        add_layer(layer_id)
+    if not saw_overlay_layer and overlay_layer_ids:
+        insert_index = normalized.index("character3") + 1 if "character3" in normalized else len(normalized)
+        for overlay_layer_id in reversed(overlay_layer_ids):
+            if overlay_layer_id not in normalized:
+                normalized.insert(insert_index, overlay_layer_id)
+    for layer_id in extra_layer_ids:
         if (
             SCENE_CHARACTER_LAYER_RE.match(layer_id)
             or SCENE_TEXT_LAYER_RE.match(layer_id)
-        ) and layer_id not in normalized:
-            normalized.append(layer_id)
+            or layer_id in overlay_layer_ids
+        ):
+            add_layer(layer_id)
     return normalized
 
 
@@ -1846,6 +2215,8 @@ def normalize_scene_layer_order_mode(raw_mode) -> str:
 
 
 def resolve_scene_layer_draw_order(layer_order, layer_order_mode: str) -> list[str]:
+    if isinstance(layer_order, list):
+        return [str(layer_id) for layer_id in layer_order]
     return normalize_scene_layer_order(layer_order)
 
 
@@ -1899,7 +2270,7 @@ def draw_scene_text(result: Image.Image, text: dict, position_scale: float) -> N
     )
 
 
-def load_scene_inputs() -> tuple[Image.Image, list[dict], list[dict], dict, dict, list[str], str, str, str, str, int, int, int]:
+def load_scene_inputs() -> tuple[Image.Image, list[dict], list[dict], dict, list[dict], list[str], str, str, str, str, int, int, int]:
     base_image = request.files.get("base_image")
     base_image_name = (request.form.get("base_image_name") or "").strip()
     canvas_preset = (request.form.get("canvas_preset") or "").strip()
@@ -1949,8 +2320,13 @@ def load_scene_inputs() -> tuple[Image.Image, list[dict], list[dict], dict, dict
 
     texts = load_scene_text_inputs()
     message_band = load_message_band_input()
-    bubble_overlay = load_scene_bubble_overlay_input()
-    layer_order = load_scene_layer_order(extra_layer_ids=[text["layer_id"] for text in texts])
+    bubble_overlay = load_scene_overlay_layers_input()
+    layer_order = load_scene_layer_order(
+        extra_layer_ids=[
+            *[text["layer_id"] for text in texts],
+            *[build_overlay_layer_key(layer["id"]) for layer in bubble_overlay],
+        ]
+    )
     layer_order_mode = load_scene_layer_order_mode()
     preview_stem = "scene"
     return base, active_characters, texts, message_band, bubble_overlay, layer_order, layer_order_mode, preview_stem, canvas_preset, base_fit_mode, base_scale, base_x, base_y
@@ -2005,7 +2381,7 @@ def compose_scene(
     characters: list[dict],
     texts: list[dict],
     message_band: dict,
-    bubble_overlay: dict,
+    overlay_layers: list[dict],
     layer_order: list[str],
     layer_order_mode: str,
     canvas_preset: str,
@@ -2052,39 +2428,44 @@ def compose_scene(
             ),
         )
 
-    def draw_overlay_layer() -> None:
-        bubble_overlay_layout = build_scene_bubble_overlay_layout(bubble_overlay, position_scale)
-        if bubble_overlay_layout is None:
-            return
-        if bubble_overlay_layout["source_type"] == "asset":
-            overlay_image = rasterize_bubble_overlay_asset(
-                bubble_overlay_layout["asset"],
-                bubble_overlay_layout["width"],
-                bubble_overlay_layout["height"],
-            )
-        else:
-            overlay_path = resolve_scene_overlay_output_path(bubble_overlay_layout["upload_file"])
-            if overlay_path is None:
-                raise FileNotFoundError(f"scene overlay image not found: {bubble_overlay_layout['upload_file']}")
-            overlay_image = Image.open(overlay_path).convert("RGBA").resize(
-                (bubble_overlay_layout["width"], bubble_overlay_layout["height"]),
-                Image.Resampling.LANCZOS,
-            )
-        result.alpha_composite(overlay_image, (bubble_overlay_layout["x"], bubble_overlay_layout["y"]))
+    overlay_layers = normalize_scene_overlay_layers_state({"overlay_layers": overlay_layers})
+    overlay_layouts = build_scene_overlay_layer_layouts(overlay_layers, position_scale)
+    overlay_layouts_by_layer_key = {
+        overlay_layout["layer_key"]: overlay_layout
+        for overlay_layout in overlay_layouts
+    }
+
+    def draw_overlay_layout(overlay_layout: dict) -> None:
+        overlay_image = rasterize_bubble_overlay_asset(
+            overlay_layout["asset"],
+            overlay_layout["width"],
+            overlay_layout["height"],
+        )
+        result.alpha_composite(overlay_image, (overlay_layout["x"], overlay_layout["y"]))
+
+    def draw_overlay_layer_by_key(layer_key: str) -> None:
+        overlay_layout = overlay_layouts_by_layer_key.get(layer_key)
+        if overlay_layout is not None:
+            draw_overlay_layout(overlay_layout)
 
     draw_actions = {
         "base_image": draw_base_layer,
         "message_band": lambda: draw_message_band(result, message_band, position_scale),
-        "overlay_image": draw_overlay_layer,
     }
     # Dynamic text slots may exist even when a legacy or damaged POST omits them from layer_order.
-    draw_order = normalize_scene_layer_order(layer_order, extra_layer_ids=list(texts_by_layer.keys()))
+    draw_order = normalize_scene_layer_order(
+        layer_order,
+        extra_layer_ids=[*list(texts_by_layer.keys()), *list(overlay_layouts_by_layer_key.keys())],
+    )
     for layer_id in resolve_scene_layer_draw_order(draw_order, layer_order_mode):
         if SCENE_CHARACTER_LAYER_RE.match(layer_id):
             draw_character_layer(characters_by_layer.get(layer_id))
             continue
-        if SCENE_TEXT_LAYER_RE.match(layer_id):
+        elif SCENE_TEXT_LAYER_RE.match(layer_id):
             draw_scene_text(result, texts_by_layer.get(layer_id), position_scale)
+            continue
+        elif SCENE_OVERLAY_LAYER_RE.match(layer_id):
+            draw_overlay_layer_by_key(layer_id)
             continue
         draw_action = draw_actions.get(layer_id)
         if draw_action is not None:
@@ -2659,15 +3040,19 @@ def scene_preview_api():
         layout_canvas = Image.new("RGBA", build_canvas_size(canvas_preset, True), (0, 0, 0, 0))
         layout_draw = ImageDraw.Draw(layout_canvas)
         preview_message_band_layout = build_message_band_layout(message_band, SCENE_PREVIEW_SCALE)
-        preview_bubble_overlay_layout = build_scene_bubble_overlay_layout(bubble_overlay, SCENE_PREVIEW_SCALE)
-        if preview_bubble_overlay_layout is not None:
-            overlay_output_path = build_overwrite_output_path(SCENE_PREVIEW_OUTPUTS_DIR, f"{cache_key}_overlay")
+        preview_overlay_layer_layouts = build_scene_overlay_layer_layouts(bubble_overlay, SCENE_PREVIEW_SCALE)
+        for preview_overlay_layout in preview_overlay_layer_layouts:
+            overlay_output_path = build_overwrite_output_path(
+                SCENE_PREVIEW_OUTPUTS_DIR,
+                f"{cache_key}_{preview_overlay_layout['id']}_overlay",
+            )
             rasterize_bubble_overlay_asset(
-                preview_bubble_overlay_layout["asset"],
-                preview_bubble_overlay_layout["width"],
-                preview_bubble_overlay_layout["height"],
+                preview_overlay_layout["asset"],
+                preview_overlay_layout["width"],
+                preview_overlay_layout["height"],
             ).save(overlay_output_path)
-            preview_bubble_overlay_layout["image_url"] = f"/outputs/{overlay_output_path.relative_to(OUTPUTS_DIR)}"
+            preview_overlay_layout["image_url"] = f"/outputs/{overlay_output_path.relative_to(OUTPUTS_DIR)}"
+        preview_bubble_overlay_layout = preview_overlay_layer_layouts[0] if preview_overlay_layer_layouts else None
         preview_text_layouts = {
             text["state_key"]: build_scene_text_layout(layout_draw, text=text, position_scale=SCENE_PREVIEW_SCALE)
             for text in texts
@@ -2678,8 +3063,15 @@ def scene_preview_api():
                 "image_url": f"/outputs/{output_path.relative_to(OUTPUTS_DIR)}",
                 "layout": {
                     "bubble_overlay": preview_bubble_overlay_layout,
+                    "overlay_layers": preview_overlay_layer_layouts,
                     "message_band": preview_message_band_layout,
-                    "layer_order": normalize_scene_layer_order(layer_order),
+                    "layer_order": normalize_scene_layer_order(
+                        layer_order,
+                        extra_layer_ids=[
+                            *[text["layer_id"] for text in texts],
+                            *[overlay_layout["layer_key"] for overlay_layout in preview_overlay_layer_layouts],
+                        ],
+                    ),
                     "layer_order_mode": normalize_scene_layer_order_mode(layer_order_mode),
                     **preview_text_layouts,
                 },

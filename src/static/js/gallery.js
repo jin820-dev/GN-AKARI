@@ -21,17 +21,44 @@ const galleryPreviewClose = document.getElementById('gallery-preview-close');
 const selectableGalleryKinds = new Set(['background', 'overlay']);
 const sceneStorageKey = 'gn_akari_scene_state';
 const galleryCategoryStorageKey = 'gn_akari_gallery_category';
-const minimumCharacterSlotCount = 3;
+const noCharacterSlotsMessage = '先に写真合成ページでキャラを追加してください';
+const noOverlayLayersMessage = '先に写真合成ページでOverlayレイヤーを追加してください';
 
-function getSceneCharacterSlotCount() {
-  const counts = [minimumCharacterSlotCount];
+function buildSequentialSlots(count) {
+  return Array.from({ length: Math.max(0, Number(count) || 0) }, (_, index) => index + 1);
+}
+
+function loadSceneState() {
   try {
     const raw = localStorage.getItem(sceneStorageKey);
     const state = raw ? JSON.parse(raw) : null;
-    const storedCount = Number(state?.character_slot_count || 0);
-    if (storedCount > 0) {
-      counts.push(storedCount);
+    return state && typeof state === 'object' ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+function getSceneCharacterName(state, slot) {
+  const layerId = `character${slot}`;
+  const directName = String(state?.[`${layerId}_name`] || '').trim();
+  if (directName) return directName;
+  const layerName = String(state?.layer_names?.[layerId] || '').trim();
+  return layerName || `キャラ${slot}`;
+}
+
+function getSceneCharacterSlots() {
+  try {
+    const state = loadSceneState();
+    if (!state || typeof state !== 'object') {
+      return [];
     }
+
+    const storedCount = Number(state?.character_slot_count || 0);
+    if (Number.isFinite(storedCount) && storedCount >= 0 && state.character_slot_count !== undefined) {
+      return buildSequentialSlots(storedCount);
+    }
+
+    const counts = [];
     if (Array.isArray(state?.layer_order)) {
       state.layer_order.forEach((layerId) => {
         const match = String(layerId).match(/^character(\d+)$/);
@@ -40,27 +67,110 @@ function getSceneCharacterSlotCount() {
         }
       });
     }
+    Object.keys(state).forEach((key) => {
+      const match = key.match(/^character(\d+)_/);
+      if (match) {
+        counts.push(Number(match[1]) || 0);
+      }
+    });
+    return buildSequentialSlots(Math.max(0, ...counts));
   } catch {
-    // Keep the fixed initial slots when scene state is unavailable.
+    return [];
   }
-  return Math.max(...counts);
+}
+
+function getSceneCharacterSlotItems() {
+  const state = loadSceneState();
+  return getSceneCharacterSlots().map((slot) => ({
+    slot,
+    label: getSceneCharacterName(state, slot),
+  }));
+}
+
+function isExistingSceneCharacterSlot(slot) {
+  const slotNumber = Number(slot) || 0;
+  return getSceneCharacterSlots().includes(slotNumber);
 }
 
 function initializePortraitSlotMenus() {
-  const slotCount = getSceneCharacterSlotCount();
+  const slots = getSceneCharacterSlotItems();
   document.querySelectorAll('[data-portrait-slot-menu]').forEach((menu) => {
-    const filename = menu.closest('.gallery-use-menu')?.querySelector('.gallery-action-button--use')?.dataset.filename || '';
+    const useButton = menu.closest('.gallery-use-menu')?.querySelector('.gallery-action-button--use');
+    const filename = useButton?.dataset.filename || '';
     menu.replaceChildren();
-    for (let slot = 1; slot <= slotCount; slot += 1) {
+    if (useButton) {
+      const disabled = slots.length === 0;
+      useButton.disabled = disabled;
+      useButton.classList.toggle('is-disabled', disabled);
+      useButton.title = disabled ? noCharacterSlotsMessage : '適用先を選択';
+      useButton.setAttribute('aria-label', useButton.title);
+      useButton.setAttribute('aria-expanded', 'false');
+    }
+    if (slots.length === 0) {
+      menu.hidden = true;
+      return;
+    }
+    slots.forEach((item) => {
       const option = document.createElement('button');
       option.type = 'button';
       option.className = 'portrait-slot-option';
       option.dataset.filename = filename;
-      option.dataset.slot = String(slot);
-      option.textContent = `キャラ${slot}`;
-      option.addEventListener('click', () => usePortrait(filename, slot));
+      option.dataset.slot = String(item.slot);
+      option.textContent = `${item.label}に使う`;
+      option.addEventListener('click', () => usePortrait(filename, item.slot));
       menu.appendChild(option);
+    });
+  });
+}
+
+function getSceneOverlayLayers() {
+  try {
+    const state = loadSceneState();
+    if (Array.isArray(state?.overlay_layers)) {
+      return [...state.overlay_layers]
+        .sort((a, b) => (Number(a.order || 0) - Number(b.order || 0)))
+        .map((layer, index) => ({
+          slotId: `slot_${index + 1}`,
+          label: String(layer.name || `Overlay ${index + 1}`).trim() || `Overlay ${index + 1}`,
+        }));
     }
+  } catch {
+    // Fall back to the initial overlay layers when scene state is unavailable.
+  }
+  return [1, 2, 3].map((number) => ({
+    slotId: `slot_${number}`,
+    label: `Overlay ${number}`,
+  }));
+}
+
+function initializeOverlayLayerMenus() {
+  const overlayLayers = getSceneOverlayLayers();
+  document.querySelectorAll('[data-overlay-slot-menu]').forEach((menu) => {
+    const useButton = menu.closest('.gallery-use-menu')?.querySelector('.gallery-action-button--use');
+    const assetId = useButton?.dataset.overlayAsset || '';
+    menu.replaceChildren();
+    if (useButton) {
+      const disabled = overlayLayers.length === 0;
+      useButton.disabled = disabled;
+      useButton.classList.toggle('is-disabled', disabled);
+      useButton.title = disabled ? noOverlayLayersMessage : '適用先を選択';
+      useButton.setAttribute('aria-label', useButton.title);
+      useButton.setAttribute('aria-expanded', 'false');
+    }
+    if (overlayLayers.length === 0) {
+      menu.hidden = true;
+      return;
+    }
+    overlayLayers.forEach((layer) => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'portrait-slot-option';
+      option.dataset.overlayAsset = assetId;
+      option.dataset.overlaySlot = layer.slotId;
+      option.textContent = `${layer.label} に使う`;
+      option.addEventListener('click', () => useOverlayAsset(assetId, layer.slotId));
+      menu.appendChild(option);
+    });
   });
 }
 
@@ -210,6 +320,7 @@ function closeGalleryPreview() {
 function usePortrait(filename, slot = 1) {
   if (!filename) return;
   const slotNumber = Number(slot) || 1;
+  if (!isExistingSceneCharacterSlot(slotNumber)) return;
   const slotParam = slotNumber > 1 ? `&slot=${encodeURIComponent(slotNumber)}` : '';
   window.location.href = "/scene?portrait=" + encodeURIComponent(filename) + slotParam;
 }
@@ -217,6 +328,13 @@ function usePortrait(filename, slot = 1) {
 function useBackground(filename) {
   if (!filename) return;
   window.location.href = "/scene?base_image_name=" + encodeURIComponent(filename);
+}
+
+function useOverlayAsset(assetId, slotId = 'slot_2') {
+  if (!assetId) return;
+  if (getSceneOverlayLayers().length === 0) return;
+  const resolvedSlotId = slotId || 'slot_2';
+  window.location.href = `/scene?overlay_asset=${encodeURIComponent(assetId)}&overlay_slot=${encodeURIComponent(resolvedSlotId)}`;
 }
 
 function closePortraitSlotMenus(exceptMenu = null) {
@@ -229,11 +347,52 @@ function closePortraitSlotMenus(exceptMenu = null) {
   });
 }
 
+function closeOverlaySlotMenus(exceptMenu = null) {
+  document.querySelectorAll('[data-overlay-slot-menu]').forEach((menu) => {
+    if (menu === exceptMenu) return;
+    menu.hidden = true;
+    menu.closest('.gallery-item')?.classList.remove('is-menu-open');
+    const button = menu.closest('.gallery-use-menu')?.querySelector('.gallery-action-button--use');
+    button?.setAttribute('aria-expanded', 'false');
+  });
+}
+
 function togglePortraitSlotMenu(button) {
+  initializePortraitSlotMenus();
+  if (!button || button.disabled || getSceneCharacterSlots().length === 0) {
+    if (button) {
+      button.title = noCharacterSlotsMessage;
+      button.setAttribute('aria-label', noCharacterSlotsMessage);
+      button.setAttribute('aria-expanded', 'false');
+    }
+    closePortraitSlotMenus();
+    return;
+  }
   const menu = button?.closest('.gallery-use-menu')?.querySelector('[data-portrait-slot-menu]');
   if (!menu) return;
   const willOpen = menu.hidden;
   closePortraitSlotMenus(menu);
+  closeOverlaySlotMenus();
+  menu.hidden = !willOpen;
+  menu.closest('.gallery-item')?.classList.toggle('is-menu-open', willOpen);
+  button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+}
+
+function toggleOverlaySlotMenu(button) {
+  if (!button || button.disabled || getSceneOverlayLayers().length === 0) {
+    if (button) {
+      button.title = noOverlayLayersMessage;
+      button.setAttribute('aria-label', noOverlayLayersMessage);
+      button.setAttribute('aria-expanded', 'false');
+    }
+    closeOverlaySlotMenus();
+    return;
+  }
+  const menu = button?.closest('.gallery-use-menu')?.querySelector('[data-overlay-slot-menu]');
+  if (!menu) return;
+  const willOpen = menu.hidden;
+  closeOverlaySlotMenus(menu);
+  closePortraitSlotMenus();
   menu.hidden = !willOpen;
   menu.closest('.gallery-item')?.classList.toggle('is-menu-open', willOpen);
   button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
@@ -425,6 +584,25 @@ function appendOverlayGalleryItem(item) {
 
   const actions = document.createElement('div');
   actions.className = 'gallery-actions';
+  const useMenu = document.createElement('div');
+  useMenu.className = 'gallery-use-menu';
+  const useButton = document.createElement('button');
+  useButton.type = 'button';
+  useButton.className = 'gallery-action-button gallery-action-button--use gallery-action-button--overlay-use';
+  useButton.dataset.overlayAsset = item.id || '';
+  useButton.title = '適用先を選択';
+  useButton.setAttribute('aria-label', '適用先を選択');
+  useButton.setAttribute('aria-haspopup', 'menu');
+  useButton.setAttribute('aria-expanded', 'false');
+  useButton.textContent = '→';
+  useButton.addEventListener('click', () => toggleOverlaySlotMenu(useButton));
+  useMenu.appendChild(useButton);
+  const slotMenu = document.createElement('div');
+  slotMenu.className = 'portrait-slot-menu';
+  slotMenu.dataset.overlaySlotMenu = '';
+  slotMenu.hidden = true;
+  useMenu.appendChild(slotMenu);
+  actions.appendChild(useMenu);
   const deleteButton = document.createElement('button');
   deleteButton.type = 'button';
   deleteButton.className = 'gallery-action-button gallery-action-button--delete';
@@ -447,6 +625,7 @@ function appendOverlayGalleryItem(item) {
   card.appendChild(meta);
   card.appendChild(actions);
   overlayGalleryGrid.prepend(card);
+  initializeOverlayLayerMenus();
   updateEmptyState('overlay');
 }
 
@@ -534,6 +713,7 @@ async function uploadGalleryFiles(files, uploadFile) {
 document.addEventListener('click', (event) => {
   if (event.target.closest('.gallery-use-menu')) return;
   closePortraitSlotMenus();
+  closeOverlaySlotMenus();
 });
 
 document.addEventListener('click', (event) => {
@@ -616,3 +796,4 @@ updateSelectionControls('background');
 updateSelectionControls('overlay');
 
 initializePortraitSlotMenus();
+initializeOverlayLayerMenus();

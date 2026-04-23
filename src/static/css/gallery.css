@@ -288,6 +288,17 @@ h2 {
   background: var(--akari-soft);
   border-color: var(--akari-accent);
 }
+.gallery-action-button:disabled,
+.gallery-action-button.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.gallery-action-button:disabled:hover,
+.gallery-action-button.is-disabled:hover {
+  background: #fffdfa;
+  border-color: var(--akari-border);
+}
 .gallery-action-button--use {
   font-size: 18px;
 }
