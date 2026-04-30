@@ -541,12 +541,16 @@ input[type="file"] {
   cursor: grabbing;
 }
 .preview-stage-viewport {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
   width: 100%;
   min-height: 0;
   overflow: hidden;
 }
 .preview-stage-scale {
-  transform-origin: top left;
+  flex: 0 0 auto;
+  transform-origin: top center;
   will-change: transform;
 }
 .preview-canvas {

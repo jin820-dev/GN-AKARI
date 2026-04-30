@@ -51,7 +51,6 @@
     const bubbleDebugRect = document.getElementById('bubble-debug-rect');
     const sceneEmpty = document.getElementById('scene-empty');
     const sceneLink = document.getElementById('scene-link');
-    const sceneLinkRow = document.getElementById('scene-link-row');
     const baseImageInput = document.getElementById('base-image');
     const backgroundPickerToggle = document.getElementById('background-picker-toggle');
     const backgroundPicker = document.getElementById('background-picker');
@@ -3980,9 +3979,10 @@
           throw new Error(data.error || '合成に失敗しました。');
         }
 
-        sceneLinkRow?.classList.remove('is-hidden');
-        sceneLink.href = data.image_url;
-        sceneLink.textContent = data.image_url.replace('/outputs/', '');
+        if (sceneLink) {
+          sceneLink.href = data.image_url;
+          sceneLink.textContent = '';
+        }
         renderScenePreviewLayers();
         showSceneStatus('scene を保存しました。');
       } catch (error) {

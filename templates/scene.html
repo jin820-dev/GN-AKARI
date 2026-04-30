@@ -361,7 +361,7 @@
     <section class="panel">
       <h2>Preview</h2>
       <div id="current-source" class="current-source"></div>
-      <p id="scene-link-row" class="{% if not scene_image %}is-hidden{% endif %}">
+      <p id="scene-link-row" class="is-hidden">
         <a id="scene-link" href="{% if scene_image %}/outputs/{{ scene_image }}{% endif %}" target="_blank">
           {{ scene_image or '' }}
         </a>
